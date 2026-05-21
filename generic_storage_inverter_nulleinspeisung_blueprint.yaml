@@ -1,22 +1,9 @@
 blueprint:
-  name: Zendure/Solarman Nulleinspeisung mit 2 Speichern - Geraeteauswahl v7
+  name: Zendure/Solarman/Shelly Nulleinspeisung mit 2 Speichern 
   description: >-
-    Regelt zwei Zendure-Speicher ueber die offizielle Zendure Home Assistant
-    Integration und einen ueber Solarman angebundenen Wechselrichter auf
-    moeglichst geringe Netzeinspeisung. Fuer Speicher 1 und Speicher 2 wird
-    jeweils nur das Home-Assistant-Geraet ausgewaehlt. Die benoetigten
-    Zendure-Entitaeten werden zur Laufzeit aus den Geraete-Entitaeten
-    abgeleitet: electric_level/soc_level, output_pack_power,
-    pack_input_power, total_kwh, ac_mode, input_limit, output_limit und
-    optional grid_off_mode bzw. ein Off-Grid-Switch. Der Netzsensor wird aus
-    einem Shelly-Geraet bevorzugt ueber total_active_power abgeleitet. Die
-    Wechselrichterbegrenzung wird aus dem Solarman-Geraet ueber die Number
-    *_active_power_regulation abgeleitet und als Prozentwert gesetzt. Die
-    Regelung laeuft jede Sekunde. Speicher-zu-Speicher-Transfer ueber das
-    Hausnetz ist nur erlaubt, wenn der annehmende Speicher einen niedrigeren
-    SoC hat als der abgebende Speicher. Ausserdem wird nur gemessener
-    Ladeueberschuss des abgebenden Speichers verwendet. Die Hausnetz-Leistung
-    ist konfigurierbar und standardmaessig auf 1000 W begrenzt.
+    Regelt zwei Zendure-Speicher ueber die offizielle Zendure Home Assistant Integration und einen ueber Solarman angebundenen Wechselrichter auf moeglichst geringe Netzeinspeisung. 
+    Die Regelung laeuft jede Sekunde. Speicher-zu-Speicher-Transfer ueber das Hausnetz ist nur erlaubt, wenn der annehmende Speicher einen niedrigeren
+    SoC hat als der abgebende Speicher. Ausserdem wird nur gemessener Ladeueberschuss des abgebenden Speichers verwendet. Die Hausnetz-Leistung ist konfigurierbar und standardmaessig auf 1000 W begrenzt.
   domain: automation
   input:
     grid_meter_device:
