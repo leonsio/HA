@@ -1,9 +1,24 @@
 blueprint:
-  name: Zendure/Solarman/Shelly Nulleinspeisung mit 2 Speichern 
+  name: Zendure/Solarman Nulleinspeisung mit 2 Speichern - Geraeteauswahl v8
   description: >-
-    Regelt zwei Zendure-Speicher ueber die offizielle Zendure Home Assistant Integration und einen ueber Solarman angebundenen Wechselrichter auf moeglichst geringe Netzeinspeisung. 
-    Die Regelung laeuft jede Sekunde. Speicher-zu-Speicher-Transfer ueber das Hausnetz ist nur erlaubt, wenn der annehmende Speicher einen niedrigeren
-    SoC hat als der abgebende Speicher. Ausserdem wird nur gemessener Ladeueberschuss des abgebenden Speichers verwendet. Die Hausnetz-Leistung ist konfigurierbar und standardmaessig auf 1000 W begrenzt.
+    Regelt zwei Zendure-Speicher ueber die offizielle Zendure Home Assistant
+    Integration und einen ueber Solarman angebundenen Wechselrichter auf
+    moeglichst geringe Netzeinspeisung. Fuer Speicher 1 und Speicher 2 wird
+    jeweils nur das Home-Assistant-Geraet ausgewaehlt. Die benoetigten
+    Zendure-Entitaeten werden zur Laufzeit aus den Geraete-Entitaeten
+    abgeleitet: electric_level/soc_level, output_pack_power,
+    pack_input_power, total_kwh, ac_mode, input_limit, output_limit und
+    optional grid_off_mode bzw. ein Off-Grid-Switch. Der Off-Grid-Port wird
+    nur an dem separat ausgewaehlten Zendure-Speichergeraet geschaltet, an
+    dessen Off-Grid-Port der Wechselrichter angeschlossen ist. Der Netzsensor
+    wird aus einem Shelly-Geraet bevorzugt ueber total_active_power abgeleitet. Die
+    Wechselrichterbegrenzung wird aus dem Solarman-Geraet ueber die Number
+    *_active_power_regulation abgeleitet und als Prozentwert gesetzt. Die
+    Regelung laeuft jede Sekunde. Speicher-zu-Speicher-Transfer ueber das
+    Hausnetz ist nur erlaubt, wenn der annehmende Speicher einen niedrigeren
+    SoC hat als der abgebende Speicher. Ausserdem wird nur gemessener
+    Ladeueberschuss des abgebenden Speichers verwendet. Die Hausnetz-Leistung
+    ist konfigurierbar und standardmaessig auf 1000 W begrenzt.
   domain: automation
   input:
     grid_meter_device:
@@ -46,6 +61,22 @@ blueprint:
         Zweites physisches Zendure-Speichergeraet aus der Zendure Home
         Assistant Integration. Nicht dasselbe Geraet wie Speicher 1 und nicht
         den Zendure Manager auswaehlen.
+      selector:
+        device:
+          filter:
+            - integration: zendure_ha
+          entity:
+            - domain: sensor
+
+
+    offgrid_inverter_storage_device:
+      name: Speicher mit Wechselrichter am Off-Grid-Port
+      description: >-
+        Zendure-Speichergeraet, an dessen Off-Grid-Port der Wechselrichter
+        angeschlossen ist. Dieses Geraet muss identisch mit Speicher 1 oder
+        Speicher 2 sein. Nur bei diesem ausgewaehlten Geraet wird der
+        Off-Grid-Port bei Wechselrichter-Ausfall ausgeschaltet und bei
+        Wiederkehr wieder eingeschaltet.
       selector:
         device:
           filter:
@@ -304,7 +335,7 @@ condition: []
 variables:
   # Block: globale Blueprint-Metadaten.
   # Setzt nur die interne Versionskennung fuer Diagnose und Nachvollziehbarkeit; es wird keine Steuerentscheidung berechnet.
-  blueprint_version: "2026-05-21-zendure-device-v7-choose-conditions-comments"
+  blueprint_version: "2026-05-21-zendure-device-v8-offgrid-selected-device"
 
 mode: single
 max_exceeded: silent
@@ -316,6 +347,7 @@ action:
       grid_meter_device_id: !input grid_meter_device
       storage1_device_id: !input storage1_device
       storage2_device_id: !input storage2_device
+      offgrid_inverter_storage_device_id: !input offgrid_inverter_storage_device
       inverter_device_id: !input inverter_device
       invert_grid_sign_value: !input invert_grid_sign
 
@@ -525,6 +557,24 @@ action:
         {% endif %}
         {{ ns.e }}
 
+      selected_offgrid_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(offgrid_inverter_storage_device_id) if e.startswith('select.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_grid_off_mode') or oid.endswith('_off_grid_mode') or oid.endswith('_offgrid_mode')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {% if ns.e == '' %}
+          {% for e in device_entities(offgrid_inverter_storage_device_id) if e.startswith('switch.') %}
+            {% set oid = e.split('.', 1)[1] %}
+            {% if ns.e == '' and ('off_grid' in oid or 'offgrid' in oid or 'grid_off' in oid) %}
+              {% set ns.e = e %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ ns.e }}
+
       inverter_active_power_regulation_entity: >-
         {% set ns = namespace(e='') %}
         {% for e in device_entities(inverter_device_id) if e.startswith('number.') %}
@@ -553,6 +603,8 @@ action:
         {% if storage2_ac_select_entity == '' %}{% set missing = missing + ['Speicher 2 ac_mode'] %}{% endif %}
         {% if storage2_input_number_entity == '' %}{% set missing = missing + ['Speicher 2 input_limit'] %}{% endif %}
         {% if storage2_output_number_entity == '' %}{% set missing = missing + ['Speicher 2 output_limit'] %}{% endif %}
+        {% if offgrid_inverter_storage_device_id not in [storage1_device_id, storage2_device_id] %}{% set missing = missing + ['Off-Grid-Geraet muss Speicher 1 oder Speicher 2 sein'] %}{% endif %}
+        {% if selected_offgrid_entity == '' %}{% set missing = missing + ['Ausgewaehltes Off-Grid-Geraet grid_off_mode/off_grid switch'] %}{% endif %}
         {% if inverter_active_power_regulation_entity == '' %}{% set missing = missing + ['Solarman active_power_regulation'] %}{% endif %}
         {{ missing | join(', ') }}
       critical_entity_missing: >-
@@ -573,9 +625,10 @@ action:
                 Der Blueprint konnte folgende Entitaeten nicht automatisch aus
                 den ausgewaehlten Geraeten ableiten: {{ missing_entities_message }}.
                 Bitte pruefen, ob wirklich physische Zendure-HA Speichergeraete,
-                ein Shelly-Netzzaehler und ein Solarman-Wechselrichtergeraet
-                ausgewaehlt wurden und ob die Entity-IDs nicht manuell so
-                umbenannt wurden, dass die Standard-Suffixe fehlen.
+                ein Shelly-Netzzaehler, ein Solarman-Wechselrichtergeraet und
+                fuer den Off-Grid-Port Speicher 1 oder Speicher 2 ausgewaehlt
+                wurden und ob die Entity-IDs nicht manuell so umbenannt wurden,
+                dass die Standard-Suffixe fehlen.
           - stop: Benoetigte Entitaeten wurden nicht gefunden.
 
   - service: persistent_notification.dismiss
@@ -779,98 +832,58 @@ action:
               value: 0
           - stop: Kritischer Sensor fuer die Nulleinspeisung ist nicht verfuegbar.
 
-  # choose: Schaltet die Off-Grid-Ports beider Speicher ab oder wieder ein, je nach Erreichbarkeit des Solarman-Wechselrichters.
+  # choose: Schaltet ausschliesslich den Off-Grid-Port des ausgewaehlten Zendure-Speichers, an dem der Wechselrichter angeschlossen ist.
   - choose:
-      # conditions: Wahr, wenn die Solarman-Entitaet *_active_power_regulation nicht erreichbar oder ungueltig ist; dann Off-Grid deaktivieren.
+      # conditions: Wahr, wenn die Solarman-Entitaet *_active_power_regulation nicht erreichbar oder ungueltig ist; dann nur den ausgewaehlten Off-Grid-Port deaktivieren.
       - conditions:
           - condition: template
             value_template: "{{ inverter_unavailable | bool(false) }}"
         sequence:
-          # choose: Waehlt fuer Speicher 1 die passende Abschaltaktion anhand des Off-Grid-Entitaetstyps select oder switch.
+          # choose: Waehlt fuer das ausgewaehlte Off-Grid-Geraet die passende Abschaltaktion anhand des Entitaetstyps select oder switch.
           - choose:
-              # conditions: Speicher 1 Off-Grid ist eine select-Entitaet und steht noch nicht auf der konfigurierten Aus-Option.
+              # conditions: Der ausgewaehlte Off-Grid-Port ist eine select-Entitaet und steht noch nicht auf der konfigurierten Aus-Option.
               - conditions:
                   - condition: template
-                    value_template: "{{ storage1_offgrid_entity.startswith('select.') and states(storage1_offgrid_entity) != offgrid_off_option_value }}"
+                    value_template: "{{ selected_offgrid_entity.startswith('select.') and states(selected_offgrid_entity) != offgrid_off_option_value }}"
                 sequence:
                   - service: select.select_option
                     target:
-                      entity_id: "{{ storage1_offgrid_entity }}"
+                      entity_id: "{{ selected_offgrid_entity }}"
                     data:
                       option: "{{ offgrid_off_option_value }}"
-              # conditions: Speicher 1 Off-Grid ist ein switch und ist noch eingeschaltet; dann ausschalten.
+              # conditions: Der ausgewaehlte Off-Grid-Port ist ein switch und ist noch eingeschaltet; dann ausschalten.
               - conditions:
                   - condition: template
-                    value_template: "{{ storage1_offgrid_entity.startswith('switch.') and states(storage1_offgrid_entity) != 'off' }}"
+                    value_template: "{{ selected_offgrid_entity.startswith('switch.') and states(selected_offgrid_entity) != 'off' }}"
                 sequence:
                   - service: switch.turn_off
                     target:
-                      entity_id: "{{ storage1_offgrid_entity }}"
-          # choose: Waehlt fuer Speicher 2 die passende Abschaltaktion anhand des Off-Grid-Entitaetstyps select oder switch.
-          - choose:
-              # conditions: Speicher 2 Off-Grid ist eine select-Entitaet und steht noch nicht auf der konfigurierten Aus-Option.
-              - conditions:
-                  - condition: template
-                    value_template: "{{ storage2_offgrid_entity.startswith('select.') and states(storage2_offgrid_entity) != offgrid_off_option_value }}"
-                sequence:
-                  - service: select.select_option
-                    target:
-                      entity_id: "{{ storage2_offgrid_entity }}"
-                    data:
-                      option: "{{ offgrid_off_option_value }}"
-              # conditions: Speicher 2 Off-Grid ist ein switch und ist noch eingeschaltet; dann ausschalten.
-              - conditions:
-                  - condition: template
-                    value_template: "{{ storage2_offgrid_entity.startswith('switch.') and states(storage2_offgrid_entity) != 'off' }}"
-                sequence:
-                  - service: switch.turn_off
-                    target:
-                      entity_id: "{{ storage2_offgrid_entity }}"
-      # conditions: Wahr, wenn der Wechselrichter wieder erreichbar ist; dann Off-Grid bei beiden Speichern aktivieren.
+                      entity_id: "{{ selected_offgrid_entity }}"
+      # conditions: Wahr, wenn der Wechselrichter wieder erreichbar ist; dann nur den ausgewaehlten Off-Grid-Port wieder aktivieren.
       - conditions:
           - condition: template
             value_template: "{{ not (inverter_unavailable | bool(false)) }}"
         sequence:
-          # choose: Waehlt fuer Speicher 1 die passende Einschaltaktion anhand des Off-Grid-Entitaetstyps select oder switch.
+          # choose: Waehlt fuer das ausgewaehlte Off-Grid-Geraet die passende Einschaltaktion anhand des Entitaetstyps select oder switch.
           - choose:
-              # conditions: Speicher 1 Off-Grid ist eine select-Entitaet und steht noch nicht auf der konfigurierten Ein-Option.
+              # conditions: Der ausgewaehlte Off-Grid-Port ist eine select-Entitaet und steht noch nicht auf der konfigurierten Ein-Option.
               - conditions:
                   - condition: template
-                    value_template: "{{ storage1_offgrid_entity.startswith('select.') and states(storage1_offgrid_entity) != offgrid_on_option_value }}"
+                    value_template: "{{ selected_offgrid_entity.startswith('select.') and states(selected_offgrid_entity) != offgrid_on_option_value }}"
                 sequence:
                   - service: select.select_option
                     target:
-                      entity_id: "{{ storage1_offgrid_entity }}"
+                      entity_id: "{{ selected_offgrid_entity }}"
                     data:
                       option: "{{ offgrid_on_option_value }}"
-              # conditions: Speicher 1 Off-Grid ist ein switch und ist noch ausgeschaltet; dann einschalten.
+              # conditions: Der ausgewaehlte Off-Grid-Port ist ein switch und ist noch ausgeschaltet; dann einschalten.
               - conditions:
                   - condition: template
-                    value_template: "{{ storage1_offgrid_entity.startswith('switch.') and states(storage1_offgrid_entity) != 'on' }}"
+                    value_template: "{{ selected_offgrid_entity.startswith('switch.') and states(selected_offgrid_entity) != 'on' }}"
                 sequence:
                   - service: switch.turn_on
                     target:
-                      entity_id: "{{ storage1_offgrid_entity }}"
-          # choose: Waehlt fuer Speicher 2 die passende Einschaltaktion anhand des Off-Grid-Entitaetstyps select oder switch.
-          - choose:
-              # conditions: Speicher 2 Off-Grid ist eine select-Entitaet und steht noch nicht auf der konfigurierten Ein-Option.
-              - conditions:
-                  - condition: template
-                    value_template: "{{ storage2_offgrid_entity.startswith('select.') and states(storage2_offgrid_entity) != offgrid_on_option_value }}"
-                sequence:
-                  - service: select.select_option
-                    target:
-                      entity_id: "{{ storage2_offgrid_entity }}"
-                    data:
-                      option: "{{ offgrid_on_option_value }}"
-              # conditions: Speicher 2 Off-Grid ist ein switch und ist noch ausgeschaltet; dann einschalten.
-              - conditions:
-                  - condition: template
-                    value_template: "{{ storage2_offgrid_entity.startswith('switch.') and states(storage2_offgrid_entity) != 'on' }}"
-                sequence:
-                  - service: switch.turn_on
-                    target:
-                      entity_id: "{{ storage2_offgrid_entity }}"
+                      entity_id: "{{ selected_offgrid_entity }}"
 
   - variables:
       # Block: Betriebsmodus und Speicher-zu-Speicher-Ausgleich bestimmen.
