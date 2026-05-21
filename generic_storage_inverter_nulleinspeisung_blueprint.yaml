@@ -1,199 +1,89 @@
 blueprint:
-  name: Generische Nulleinspeisung mit 2 Speichern und Wechselrichter
+  name: Zendure/Solarman Nulleinspeisung mit 2 Speichern - Geraeteauswahl
   description: >-
-    Regelt zwei generische Speichersysteme, Speicher 1 und Speicher 2, zusammen
-    mit einem Wechselrichter auf möglichst geringe Einspeisung. Die
-    Netzleistung wird z. B. von einem Shelly Pro 3EM geliefert. Positive
-    Netzleistung wird als Netzbezug interpretiert, negative Netzleistung als
-    Einspeisung. Die Regelung läuft alle 5 Sekunden, verteilt Lade- und
-    Entladeleistung anhand SoC, automatisch gelesener Gesamtkapazität
-    _total_kwh und aktueller Batterieladeleistung. Die Wechselrichterbegrenzung
-    wird generisch über die Solarman-Number _active_power_regulation als
-    Prozentwert gesetzt. Wenn beide Speicher voll sind, wird der Wechselrichter
-    gedrosselt. Wenn ein Speicher wieder Kapazität frei hat, wird der
-    Wechselrichter wieder entdrosselt. Zusätzlich kann der Speicher mit deutlich
-    höherer Batterieladeleistung einen Teil dieser Leistung über das Hausnetz an
-    den schwächer geladenen Speicher weitergeben. Dadurch funktioniert der
-    Ausgleich nicht nur bei vollem Speicher, sondern auch bei asymmetrischer
-    Ladeleistung. Ein Speicher-zu-Speicher-Ausgleich wird nur freigegeben,
-    wenn der annehmende Speicher einen niedrigeren SoC als der abgebende
-    Speicher hat. Der zusätzliche Transfer wird zudem durch den gemessenen
-    Ladeleistungsueberschuss des abgebenden Speichers begrenzt, damit nicht
-    planmaessig gespeicherte Energie verschoben wird. Die Leistung über das
-    Hausnetz ist konfigurierbar und standardmäßig auf 1000 W begrenzt. Bei
-    Notaufladung gibt ein Speicher nur dann Energie an den anderen Speicher ab,
-    wenn sein SoC mindestens um die konfigurierte Reserve über dem
-    Notlade-SoC-Limit liegt und höher ist als der SoC des annehmenden Speichers;
-    andernfalls wird aus dem Netz geladen. Der Off-Grid-Port von Speicher 2
-    wird deaktiviert, wenn der Wechselrichter nicht erreichbar ist, und wieder
-    aktiviert, sobald der Wechselrichter erreichbar ist.
+    Regelt zwei Zendure-Speicher ueber die offizielle Zendure Home Assistant
+    Integration und einen ueber Solarman angebundenen Wechselrichter auf
+    moeglichst geringe Netzeinspeisung. Fuer Speicher 1 und Speicher 2 wird
+    jeweils nur das Home-Assistant-Geraet ausgewaehlt. Die benoetigten
+    Zendure-Entitaeten werden zur Laufzeit aus den Geraete-Entitaeten
+    abgeleitet: electric_level/soc_level, output_pack_power,
+    pack_input_power, total_kwh, ac_mode, input_limit, output_limit und
+    optional grid_off_mode bzw. ein Off-Grid-Switch. Der Netzsensor wird aus
+    einem Shelly-Geraet bevorzugt ueber total_active_power abgeleitet. Die
+    Wechselrichterbegrenzung wird aus dem Solarman-Geraet ueber die Number
+    *_active_power_regulation abgeleitet und als Prozentwert gesetzt. Die
+    Regelung laeuft alle 5 Sekunden. Speicher-zu-Speicher-Transfer ueber das
+    Hausnetz ist nur erlaubt, wenn der annehmende Speicher einen niedrigeren
+    SoC hat als der abgebende Speicher. Ausserdem wird nur gemessener
+    Ladeueberschuss des abgebenden Speichers verwendet. Die Hausnetz-Leistung
+    ist konfigurierbar und standardmaessig auf 1000 W begrenzt.
   domain: automation
   input:
-    grid_power_sensor:
-      name: Netzanschluss - Gesamtleistung
+    grid_meter_device:
+      name: Netzanschluss - Shelly Geraet
       description: >-
-        Sensor in Watt, z. B. Shelly Pro 3EM Gesamtleistung. Erwartet:
-        positiv = Netzbezug, negativ = Einspeisung. Falls der Sensor andersherum
-        zählt, die Option Vorzeichen invertieren aktivieren.
+        Shelly Pro 3EM oder anderes Shelly-Leistungsmessgeraet. Der Blueprint
+        sucht innerhalb dieses Geraets bevorzugt einen Sensor mit Suffix
+        _total_active_power oder _total_power. Erwartet: positiv = Netzbezug,
+        negativ = Einspeisung. Falls dein Sensor andersherum zaehlt, unten
+        Vorzeichen invertieren aktivieren.
       selector:
-        entity:
-          domain: sensor
+        device:
+          filter:
+            - integration: shelly
+          entity:
+            - domain: sensor
+              device_class: power
     invert_grid_sign:
       name: Netzleistung Vorzeichen invertieren
       default: false
       selector:
         boolean: {}
 
-    storage1_soc_sensor:
-      name: Speicher 1 - SoC Sensor
-      selector:
-        entity:
-          domain: sensor
-    storage1_battery_charge_power_sensor:
-      name: Speicher 1 - Batterieladeleistung Sensor
+    storage1_device:
+      name: Speicher 1 - Zendure Geraet
       description: >-
-        Aktuelle Batterieladeleistung in Watt. Dieser Wert wird verwendet, um
-        bei deutlich ungleicher Ladeleistung den stärker geladenen Speicher als
-        Quelle und den schwächer geladenen Speicher als Ziel zu bestimmen.
+        Physisches Zendure-Speichergeraet aus der Zendure Home Assistant
+        Integration, z. B. ein SolarFlow 800 Pro, SolarFlow 2400 AC+ oder ein
+        anderes von Zendure-HA unterstuetztes Speichergeraet. Nicht den
+        Zendure Manager auswaehlen.
       selector:
-        entity:
-          domain: sensor
-    storage1_total_kwh_sensor:
-      name: Speicher 1 - Gesamtkapazität _total_kwh
+        device:
+          filter:
+            - integration: zendure_ha
+          entity:
+            - domain: sensor
+    storage2_device:
+      name: Speicher 2 - Zendure Geraet
       description: >-
-        Sensor mit der Gesamtkapazität des Speichers in kWh. Der Wert muss vom
-        Typ float bzw. numerisch sein und wird intern in Wh umgerechnet.
+        Zweites physisches Zendure-Speichergeraet aus der Zendure Home
+        Assistant Integration. Nicht dasselbe Geraet wie Speicher 1 und nicht
+        den Zendure Manager auswaehlen.
       selector:
-        entity:
-          domain: sensor
-    storage1_ac_mode_select:
-      name: Speicher 1 - AC-Modus Select
-      selector:
-        entity:
-          domain: select
-    storage1_input_limit_number:
-      name: Speicher 1 - Ladeleistung/Input Limit Number
-      selector:
-        entity:
-          domain: number
-    storage1_output_limit_number:
-      name: Speicher 1 - Entladeleistung/Output Limit Number
-      selector:
-        entity:
-          domain: number
-    storage1_max_charge_w:
-      name: Speicher 1 - maximale Ladeleistung
-      default: 800
-      selector:
-        number:
-          min: 0
-          max: 5000
-          step: 10
-          unit_of_measurement: W
-          mode: box
-    storage1_max_discharge_w:
-      name: Speicher 1 - maximale Entladeleistung
-      default: 800
-      selector:
-        number:
-          min: 0
-          max: 5000
-          step: 10
-          unit_of_measurement: W
-          mode: box
+        device:
+          filter:
+            - integration: zendure_ha
+          entity:
+            - domain: sensor
 
-    storage2_soc_sensor:
-      name: Speicher 2 - SoC Sensor
-      selector:
-        entity:
-          domain: sensor
-    storage2_battery_charge_power_sensor:
-      name: Speicher 2 - Batterieladeleistung Sensor
+    inverter_device:
+      name: Wechselrichter - Solarman Geraet
       description: >-
-        Aktuelle Batterieladeleistung in Watt. Dieser Wert wird verwendet, um
-        bei deutlich ungleicher Ladeleistung den stärker geladenen Speicher als
-        Quelle und den schwächer geladenen Speicher als Ziel zu bestimmen.
+        Deye-/Solarman-Geraet. Der Blueprint sucht darin die Number-Entitaet
+        mit Suffix oder Namensbestandteil _active_power_regulation. Diese
+        Entitaet muss einen Prozentwert von 0 bis 100 akzeptieren.
       selector:
-        entity:
-          domain: sensor
-    storage2_total_kwh_sensor:
-      name: Speicher 2 - Gesamtkapazität _total_kwh
-      description: >-
-        Sensor mit der Gesamtkapazität des Speichers in kWh. Der Wert muss vom
-        Typ float bzw. numerisch sein und wird intern in Wh umgerechnet.
-      selector:
-        entity:
-          domain: sensor
-    storage2_ac_mode_select:
-      name: Speicher 2 - AC-Modus Select
-      selector:
-        entity:
-          domain: select
-    storage2_input_limit_number:
-      name: Speicher 2 - Ladeleistung/Input Limit Number
-      selector:
-        entity:
-          domain: number
-    storage2_output_limit_number:
-      name: Speicher 2 - Entladeleistung/Output Limit Number
-      selector:
-        entity:
-          domain: number
-    storage2_offgrid_switch:
-      name: Speicher 2 - Off-Grid-Port Switch
-      description: >-
-        Switch für den Off-Grid-Port, an dem der Wechselrichter angeschlossen
-        ist. Wird ausgeschaltet, wenn der Wechselrichter nicht erreichbar ist,
-        und wieder eingeschaltet, sobald der Wechselrichter erreichbar ist.
-      selector:
-        entity:
-          domain: switch
-    storage2_max_charge_w:
-      name: Speicher 2 - maximale Ladeleistung
-      default: 1200
-      selector:
-        number:
-          min: 0
-          max: 5000
-          step: 10
-          unit_of_measurement: W
-          mode: box
-    storage2_max_discharge_w:
-      name: Speicher 2 - maximale Entladeleistung
-      default: 1200
-      selector:
-        number:
-          min: 0
-          max: 5000
-          step: 10
-          unit_of_measurement: W
-          mode: box
-
-    inverter_active_power_regulation_number:
-      name: Wechselrichter - Solarman _active_power_regulation
-      description: >-
-        Number-Entität der Solarman-Integration für den Einstellungsparameter
-        _active_power_regulation. Erwartet wird ein Prozentwert von 0 bis 100.
-      selector:
-        entity:
-          domain: number
-    inverter_reachable_entity:
-      name: Wechselrichter - Erreichbarkeit/Status Entity
-      description: >-
-        Entity, deren Status die Erreichbarkeit beschreibt. Als nicht erreichbar
-        gelten unknown, unavailable, off, offline, false, not_connected,
-        unreachable und problem. Falls keine separate Status-Entity vorhanden
-        ist, kann ersatzweise die Solarman-Number _active_power_regulation
-        gewählt werden; ein gültiger Prozentwert, auch 0, gilt dann als
-        erreichbar.
-      selector:
-        entity: {}
+        device:
+          filter:
+            - integration: solarman
+          entity:
+            - domain: number
     inverter_max_w:
       name: Wechselrichter - maximale AC-Leistung
       description: >-
-        Benutzerdefinierte maximale Wechselrichterleistung in Watt. Aus diesem
-        Wert wird die Prozentbegrenzung für _active_power_regulation berechnet.
-        Beispiel: 2000 W Maximalleistung und Ziel 1000 W ergeben 50 Prozent.
+        Maximale Wechselrichterleistung in Watt. Daraus wird die Prozentgrenze
+        fuer Solarman *_active_power_regulation berechnet. Beispiel: 2000 W
+        Maximalleistung und Ziel 1000 W ergeben 50 Prozent.
       default: 2000
       selector:
         number:
@@ -234,29 +124,46 @@ blueprint:
           mode: slider
 
     storage_input_option:
-      name: Speicher AC-Modus Option für Laden
+      name: Zendure AC-Modus-Option fuer Laden
       description: >-
-        Exakter Optionsname der Select-Entität für Laden aus dem Hausnetz.
-        Beispiele je nach Integration: input, INPUT, charge oder Charge.
+        Exakter Optionsname der Zendure-Select-Entitaet ac_mode fuer Laden.
+        Bei Zendure-HA ist der Standard normalerweise input.
       default: input
       selector:
         text: {}
     storage_output_option:
-      name: Speicher AC-Modus Option für Entladen
+      name: Zendure AC-Modus-Option fuer Entladen
       description: >-
-        Exakter Optionsname der Select-Entität für Entladen in das Hausnetz.
-        Beispiele je nach Integration: output, OUTPUT, discharge oder Discharge.
+        Exakter Optionsname der Zendure-Select-Entitaet ac_mode fuer Entladen.
+        Bei Zendure-HA ist der Standard normalerweise output.
       default: output
+      selector:
+        text: {}
+    offgrid_on_option:
+      name: Zendure Off-Grid-Modus Option fuer EIN
+      description: >-
+        Wird verwendet, wenn die erkannte Off-Grid-Entitaet ein Select ist,
+        z. B. grid_off_mode. Bei Zendure-HA sind typische Optionen normal,
+        eco und off. Fuer EIN ist normal der konservative Standard.
+      default: normal
+      selector:
+        text: {}
+    offgrid_off_option:
+      name: Zendure Off-Grid-Modus Option fuer AUS
+      description: >-
+        Wird verwendet, wenn die erkannte Off-Grid-Entitaet ein Select ist.
+        Standard ist off.
+      default: off
       selector:
         text: {}
 
     max_house_grid_power_w:
-      name: Maximale Leistung über das Hausnetz
+      name: Maximale Leistung ueber das Hausnetz
       description: >-
-        Maximale Lade- oder Entladeleistung, die über das Hausnetz für
+        Maximale Lade- oder Entladeleistung, die ueber das Hausnetz fuer
         Speicherladung, Speicherentladung oder Speicher-zu-Speicher-Transfer
-        genutzt wird. Default 1000 W. Beim Transfer wird die Quellleistung und
-        Ziel-Ladeleistung jeweils auf diesen Wert begrenzt.
+        genutzt wird. Default 1000 W. Beim Transfer wird Quell- und
+        Ziel-Leistung jeweils auf diesen Wert begrenzt.
       default: 1000
       selector:
         number:
@@ -276,7 +183,7 @@ blueprint:
           unit_of_measurement: W
           mode: slider
     min_change_w:
-      name: Mindest-Änderung für neue Leistungsvorgabe
+      name: Mindest-Aenderung fuer neue Leistungsvorgabe
       default: 20
       selector:
         number:
@@ -337,14 +244,15 @@ blueprint:
           unit_of_measurement: W
           mode: box
     mutual_emergency_soc_margin:
-      name: Reserve für gegenseitige Notaufladung über SoC-Limit
+      name: Reserve fuer gegenseitige Notaufladung ueber SoC-Limit
       description: >-
-        Ein Speicher darf einen anderen Speicher zur Notaufladung über das
-        Hausnetz nur versorgen, wenn sein SoC mindestens um diesen Wert über
-        dem Netz-Nachladen-Start-SoC liegt. Default: 20 Prozentpunkte. Beispiel:
-        Start unter 10 Prozent und Reserve 20 bedeutet, dass der gebende
-        Speicher mindestens 30 Prozent SoC haben muss. Andernfalls wird aus dem
-        Netz geladen.
+        Ein Speicher darf den anderen zur Notaufladung ueber das Hausnetz nur
+        versorgen, wenn sein SoC mindestens um diesen Wert ueber dem
+        Netz-Nachladen-Start-SoC liegt und hoeher ist als der SoC des
+        annehmenden Speichers. Default: 20 Prozentpunkte. Beispiel: Start
+        unter 10 Prozent und Reserve 20 bedeutet, dass der gebende Speicher
+        mindestens 30 Prozent SoC haben muss. Andernfalls wird aus dem Netz
+        geladen.
       default: 20
       selector:
         number:
@@ -354,13 +262,11 @@ blueprint:
           unit_of_measurement: "%"
           mode: slider
     charge_imbalance_threshold_w:
-      name: Ladeleistungs-Differenz für Speicher-Ausgleich
+      name: Ladeleistungs-Differenz fuer Speicher-Ausgleich
       description: >-
         Erst wenn die Batterieladeleistung eines Speichers um mindestens diesen
-        Wert höher ist als die des anderen Speichers, wird ein zusätzlicher
-        Speicher-zu-Speicher-Ausgleich über das Hausnetz aktiviert. Beispiel:
-        Speicher 2 lädt mit 2000 W, Speicher 1 mit 1000 W, Schwellwert 300 W:
-        der Ausgleich wird aktiviert.
+        Wert hoeher ist als die des anderen Speichers, wird zusaetzlicher
+        Speicher-zu-Speicher-Ausgleich ueber das Hausnetz aktiviert.
       default: 300
       selector:
         number:
@@ -370,12 +276,12 @@ blueprint:
           unit_of_measurement: W
           mode: box
     charge_imbalance_transfer_factor:
-      name: Anteil der Ladeleistungs-Differenz übertragen
+      name: Anteil der Ladeleistungs-Differenz uebertragen
       description: >-
-        Prozentualer Anteil der gemessenen Ladeleistungs-Differenz, der über
-        das Hausnetz vom stärker geladenen Speicher zum schwächer geladenen
-        Speicher übertragen wird. 50 Prozent gleicht die Ladeleistungen
-        rechnerisch an: 2000 W gegen 1000 W ergibt ca. 500 W Transfer.
+        Prozentualer Anteil der gemessenen Ladeleistungs-Differenz, der ueber
+        das Hausnetz vom staerker geladenen Speicher zum schwaecher geladenen
+        Speicher uebertragen wird. 50 Prozent gleicht die Ladeleistungen
+        rechnerisch an.
       default: 50
       selector:
         number:
@@ -385,9 +291,9 @@ blueprint:
           unit_of_measurement: "%"
           mode: slider
     balance_transfer_min_w:
-      name: Mindestleistung für Speicher-Ausgleich
+      name: Mindestleistung fuer Speicher-Ausgleich
       description: >-
-        Unterhalb dieser berechneten Transferleistung wird kein zusätzlicher
+        Unterhalb dieser berechneten Transferleistung wird kein zusaetzlicher
         Speicher-zu-Speicher-Ausgleich gestartet.
       default: 50
       selector:
@@ -400,10 +306,10 @@ blueprint:
     balance_soc_margin:
       name: Mindest-SoC-Vorsprung des abgebenden Speichers
       description: >-
-        Speicher-zu-Speicher-Ausgleich über das Hausnetz wird nur freigegeben,
+        Speicher-zu-Speicher-Ausgleich ueber das Hausnetz wird nur freigegeben,
         wenn der abgebende Speicher um mindestens diesen Wert mehr SoC hat als
         der annehmende Speicher. Default 0 bedeutet: der annehmende Speicher
-        muss nur niedriger sein als der abgebende Speicher.
+        muss nur niedriger sein.
       default: 0
       selector:
         number:
@@ -420,37 +326,19 @@ trigger:
 condition: []
 
 variables:
-  blueprint_version: "2026-05-21-generic-balance-v3"
+  blueprint_version: "2026-05-21-zendure-device-v4"
 
 mode: single
 max_exceeded: silent
 
 action:
   - variables:
-      grid_power_sensor_entity: !input grid_power_sensor
+      grid_meter_device_id: !input grid_meter_device
+      storage1_device_id: !input storage1_device
+      storage2_device_id: !input storage2_device
+      inverter_device_id: !input inverter_device
       invert_grid_sign_value: !input invert_grid_sign
 
-      storage1_soc_sensor_entity: !input storage1_soc_sensor
-      storage1_battery_charge_power_sensor_entity: !input storage1_battery_charge_power_sensor
-      storage1_total_kwh_sensor_entity: !input storage1_total_kwh_sensor
-      storage1_ac_select_entity: !input storage1_ac_mode_select
-      storage1_input_number_entity: !input storage1_input_limit_number
-      storage1_output_number_entity: !input storage1_output_limit_number
-      storage1_max_charge_w_value: !input storage1_max_charge_w
-      storage1_max_discharge_w_value: !input storage1_max_discharge_w
-
-      storage2_soc_sensor_entity: !input storage2_soc_sensor
-      storage2_battery_charge_power_sensor_entity: !input storage2_battery_charge_power_sensor
-      storage2_total_kwh_sensor_entity: !input storage2_total_kwh_sensor
-      storage2_ac_select_entity: !input storage2_ac_mode_select
-      storage2_input_number_entity: !input storage2_input_limit_number
-      storage2_output_number_entity: !input storage2_output_limit_number
-      storage2_offgrid_switch_entity: !input storage2_offgrid_switch
-      storage2_max_charge_w_value: !input storage2_max_charge_w
-      storage2_max_discharge_w_value: !input storage2_max_discharge_w
-
-      inverter_active_power_regulation_entity: !input inverter_active_power_regulation_number
-      inverter_reachable_entity_id: !input inverter_reachable_entity
       inverter_max_w_value: !input inverter_max_w
       inverter_min_w_value: !input inverter_min_w
       inverter_ramp_w_value: !input inverter_ramp_w
@@ -458,6 +346,8 @@ action:
 
       storage_input_option_value: !input storage_input_option
       storage_output_option_value: !input storage_output_option
+      offgrid_on_option_value: !input offgrid_on_option
+      offgrid_off_option_value: !input offgrid_off_option
       max_house_grid_power_w_value: !input max_house_grid_power_w
       zero_tolerance_w_value: !input zero_tolerance_w
       min_change_w_value: !input min_change_w
@@ -473,6 +363,242 @@ action:
       balance_soc_margin_value: !input balance_soc_margin
 
   - variables:
+      grid_power_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(grid_meter_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_total_active_power') or oid.endswith('_total_power') or oid.endswith('_active_power_total') or oid.endswith('_power_total')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {% if ns.e == '' %}
+          {% for e in device_entities(grid_meter_device_id) if e.startswith('sensor.') %}
+            {% set oid = e.split('.', 1)[1] %}
+            {% set fn = state_attr(e, 'friendly_name') | default('', true) | lower %}
+            {% if ns.e == '' and (state_attr(e, 'device_class') == 'power') and ('total' in oid or 'gesamt' in oid or 'total' in fn or 'gesamt' in fn) %}
+              {% set ns.e = e %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ ns.e }}
+
+      storage1_soc_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_electric_level') or oid.endswith('_soc_level') or oid.endswith('_battery_level')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage1_battery_charge_power_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_output_pack_power') or oid.endswith('_battery_input_power') or oid.endswith('_charge_power')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage1_battery_discharge_power_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_pack_input_power') or oid.endswith('_battery_output_power') or oid.endswith('_discharge_power')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage1_total_kwh_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and oid.endswith('_total_kwh') %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage1_ac_select_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) if e.startswith('select.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_ac_mode') or oid.endswith('_acmode')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage1_input_number_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) if e.startswith('number.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_input_limit') or oid.endswith('_ac_input_limit') or oid.endswith('_inputlimit')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage1_output_number_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) if e.startswith('number.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_output_limit') or oid.endswith('_ac_output_limit') or oid.endswith('_outputlimit')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage1_offgrid_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) if e.startswith('select.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_grid_off_mode') or oid.endswith('_off_grid_mode') or oid.endswith('_offgrid_mode')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {% if ns.e == '' %}
+          {% for e in device_entities(storage1_device_id) if e.startswith('switch.') %}
+            {% set oid = e.split('.', 1)[1] %}
+            {% if ns.e == '' and ('off_grid' in oid or 'offgrid' in oid or 'grid_off' in oid) %}
+              {% set ns.e = e %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ ns.e }}
+
+      storage2_soc_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_electric_level') or oid.endswith('_soc_level') or oid.endswith('_battery_level')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage2_battery_charge_power_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_output_pack_power') or oid.endswith('_battery_input_power') or oid.endswith('_charge_power')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage2_battery_discharge_power_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_pack_input_power') or oid.endswith('_battery_output_power') or oid.endswith('_discharge_power')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage2_total_kwh_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and oid.endswith('_total_kwh') %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage2_ac_select_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) if e.startswith('select.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_ac_mode') or oid.endswith('_acmode')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage2_input_number_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) if e.startswith('number.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_input_limit') or oid.endswith('_ac_input_limit') or oid.endswith('_inputlimit')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage2_output_number_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) if e.startswith('number.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_output_limit') or oid.endswith('_ac_output_limit') or oid.endswith('_outputlimit')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage2_offgrid_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) if e.startswith('select.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_grid_off_mode') or oid.endswith('_off_grid_mode') or oid.endswith('_offgrid_mode')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {% if ns.e == '' %}
+          {% for e in device_entities(storage2_device_id) if e.startswith('switch.') %}
+            {% set oid = e.split('.', 1)[1] %}
+            {% if ns.e == '' and ('off_grid' in oid or 'offgrid' in oid or 'grid_off' in oid) %}
+              {% set ns.e = e %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ ns.e }}
+
+      inverter_active_power_regulation_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(inverter_device_id) if e.startswith('number.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_active_power_regulation') or 'active_power_regulation' in oid) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+
+  - variables:
+      missing_entities_message: >-
+        {% set missing = [] %}
+        {% if grid_power_sensor_entity == '' %}{% set missing = missing + ['Shelly total_active_power/total_power'] %}{% endif %}
+        {% if storage1_soc_sensor_entity == '' %}{% set missing = missing + ['Speicher 1 electric_level/soc_level'] %}{% endif %}
+        {% if storage1_battery_charge_power_sensor_entity == '' %}{% set missing = missing + ['Speicher 1 output_pack_power'] %}{% endif %}
+        {% if storage1_total_kwh_sensor_entity == '' %}{% set missing = missing + ['Speicher 1 total_kwh'] %}{% endif %}
+        {% if storage1_ac_select_entity == '' %}{% set missing = missing + ['Speicher 1 ac_mode'] %}{% endif %}
+        {% if storage1_input_number_entity == '' %}{% set missing = missing + ['Speicher 1 input_limit'] %}{% endif %}
+        {% if storage1_output_number_entity == '' %}{% set missing = missing + ['Speicher 1 output_limit'] %}{% endif %}
+        {% if storage2_soc_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 electric_level/soc_level'] %}{% endif %}
+        {% if storage2_battery_charge_power_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 output_pack_power'] %}{% endif %}
+        {% if storage2_total_kwh_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 total_kwh'] %}{% endif %}
+        {% if storage2_ac_select_entity == '' %}{% set missing = missing + ['Speicher 2 ac_mode'] %}{% endif %}
+        {% if storage2_input_number_entity == '' %}{% set missing = missing + ['Speicher 2 input_limit'] %}{% endif %}
+        {% if storage2_output_number_entity == '' %}{% set missing = missing + ['Speicher 2 output_limit'] %}{% endif %}
+        {% if inverter_active_power_regulation_entity == '' %}{% set missing = missing + ['Solarman active_power_regulation'] %}{% endif %}
+        {{ missing | join(', ') }}
+      critical_entity_missing: >-
+        {{ missing_entities_message | trim != '' }}
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ critical_entity_missing | bool(false) }}"
+        sequence:
+          - service: persistent_notification.create
+            data:
+              notification_id: zendure_solarman_nulleinspeisung_missing_entities
+              title: Zendure/Solarman Nulleinspeisung - Entitaeten nicht gefunden
+              message: >-
+                Der Blueprint konnte folgende Entitaeten nicht automatisch aus
+                den ausgewaehlten Geraeten ableiten: {{ missing_entities_message }}.
+                Bitte pruefen, ob wirklich physische Zendure-HA Speichergeraete,
+                ein Shelly-Netzzaehler und ein Solarman-Wechselrichtergeraet
+                ausgewaehlt wurden und ob die Entity-IDs nicht manuell so
+                umbenannt wurden, dass die Standard-Suffixe fehlen.
+          - stop: Benoetigte Entitaeten wurden nicht gefunden.
+
+  - service: persistent_notification.dismiss
+    data:
+      notification_id: zendure_solarman_nulleinspeisung_missing_entities
+    continue_on_error: true
+
+  - variables:
       grid_power_w: >-
         {% set p = states(grid_power_sensor_entity) | float(0) %}
         {{ (p * (-1 if invert_grid_sign_value else 1)) | round(0) }}
@@ -480,14 +606,28 @@ action:
       storage2_soc: "{{ states(storage2_soc_sensor_entity) | float(0) }}"
       storage1_batt_charge_w: "{{ [states(storage1_battery_charge_power_sensor_entity) | float(0), 0] | max }}"
       storage2_batt_charge_w: "{{ [states(storage2_battery_charge_power_sensor_entity) | float(0), 0] | max }}"
+      storage1_batt_discharge_w: "{{ [states(storage1_battery_discharge_power_sensor_entity) | float(0), 0] | max }}"
+      storage2_batt_discharge_w: "{{ [states(storage2_battery_discharge_power_sensor_entity) | float(0), 0] | max }}"
       storage1_total_kwh: "{{ states(storage1_total_kwh_sensor_entity) | float(0) }}"
       storage2_total_kwh: "{{ states(storage2_total_kwh_sensor_entity) | float(0) }}"
       storage1_capacity_wh: "{{ ([states(storage1_total_kwh_sensor_entity) | float(0), 0.001] | max * 1000) | round(0) }}"
       storage2_capacity_wh: "{{ ([states(storage2_total_kwh_sensor_entity) | float(0), 0.001] | max * 1000) | round(0) }}"
-      storage1_current_input_w: "{{ states(storage1_input_number_entity) | float(0) }}"
-      storage1_current_output_w: "{{ states(storage1_output_number_entity) | float(0) }}"
-      storage2_current_input_w: "{{ states(storage2_input_number_entity) | float(0) }}"
-      storage2_current_output_w: "{{ states(storage2_output_number_entity) | float(0) }}"
+      storage1_current_input_w: "{{ [states(storage1_input_number_entity) | float(0), 0] | max }}"
+      storage1_current_output_w: "{{ [states(storage1_output_number_entity) | float(0), 0] | max }}"
+      storage2_current_input_w: "{{ [states(storage2_input_number_entity) | float(0), 0] | max }}"
+      storage2_current_output_w: "{{ [states(storage2_output_number_entity) | float(0), 0] | max }}"
+      storage1_max_charge_w: >-
+        {% set m = state_attr(storage1_input_number_entity, 'max') | float(0) %}
+        {{ (m if m > 0 else max_house_grid_power_w_value | float(1000)) | round(0) }}
+      storage1_max_discharge_w: >-
+        {% set m = state_attr(storage1_output_number_entity, 'max') | float(0) %}
+        {{ (m if m > 0 else max_house_grid_power_w_value | float(1000)) | round(0) }}
+      storage2_max_charge_w: >-
+        {% set m = state_attr(storage2_input_number_entity, 'max') | float(0) %}
+        {{ (m if m > 0 else max_house_grid_power_w_value | float(1000)) | round(0) }}
+      storage2_max_discharge_w: >-
+        {% set m = state_attr(storage2_output_number_entity, 'max') | float(0) %}
+        {{ (m if m > 0 else max_house_grid_power_w_value | float(1000)) | round(0) }}
       inverter_current_percent: >-
         {{ [100, [0, states(inverter_active_power_regulation_entity) | float(100)] | max] | min }}
       inverter_current_w: >-
@@ -503,7 +643,7 @@ action:
            or (storage1_total_kwh | float(0)) <= 0
            or (storage2_total_kwh | float(0)) <= 0 }}
       inverter_unavailable: >-
-        {% set s = states(inverter_reachable_entity_id) | lower %}
+        {% set s = states(inverter_active_power_regulation_entity) | lower %}
         {{ s in ['unknown', 'unavailable', 'none', 'off', 'false', 'offline',
                  'not_connected', 'not connected', 'unreachable', 'problem'] }}
       current_input_total_w: "{{ (storage1_current_input_w | float(0) + storage2_current_input_w | float(0)) | round(0) }}"
@@ -560,41 +700,103 @@ action:
         sequence:
           - service: number.set_value
             target:
-              entity_id: !input storage1_input_limit_number
+              entity_id: "{{ storage1_input_number_entity }}"
             data:
               value: 0
           - service: number.set_value
             target:
-              entity_id: !input storage1_output_limit_number
+              entity_id: "{{ storage1_output_number_entity }}"
             data:
               value: 0
           - service: number.set_value
             target:
-              entity_id: !input storage2_input_limit_number
+              entity_id: "{{ storage2_input_number_entity }}"
             data:
               value: 0
           - service: number.set_value
             target:
-              entity_id: !input storage2_output_limit_number
+              entity_id: "{{ storage2_output_number_entity }}"
             data:
               value: 0
-          - stop: Kritischer Sensor für die Nulleinspeisung ist nicht verfügbar.
+          - stop: Kritischer Sensor fuer die Nulleinspeisung ist nicht verfuegbar.
 
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ (inverter_unavailable | bool(false)) and states(storage2_offgrid_switch_entity) != 'off' }}"
+            value_template: "{{ inverter_unavailable | bool(false) }}"
         sequence:
-          - service: switch.turn_off
-            target:
-              entity_id: !input storage2_offgrid_switch
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ storage1_offgrid_entity.startswith('select.') and states(storage1_offgrid_entity) != offgrid_off_option_value }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: "{{ storage1_offgrid_entity }}"
+                    data:
+                      option: "{{ offgrid_off_option_value }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ storage1_offgrid_entity.startswith('switch.') and states(storage1_offgrid_entity) != 'off' }}"
+                sequence:
+                  - service: switch.turn_off
+                    target:
+                      entity_id: "{{ storage1_offgrid_entity }}"
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ storage2_offgrid_entity.startswith('select.') and states(storage2_offgrid_entity) != offgrid_off_option_value }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: "{{ storage2_offgrid_entity }}"
+                    data:
+                      option: "{{ offgrid_off_option_value }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ storage2_offgrid_entity.startswith('switch.') and states(storage2_offgrid_entity) != 'off' }}"
+                sequence:
+                  - service: switch.turn_off
+                    target:
+                      entity_id: "{{ storage2_offgrid_entity }}"
       - conditions:
           - condition: template
-            value_template: "{{ not (inverter_unavailable | bool(false)) and states(storage2_offgrid_switch_entity) != 'on' }}"
+            value_template: "{{ not (inverter_unavailable | bool(false)) }}"
         sequence:
-          - service: switch.turn_on
-            target:
-              entity_id: !input storage2_offgrid_switch
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ storage1_offgrid_entity.startswith('select.') and states(storage1_offgrid_entity) != offgrid_on_option_value }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: "{{ storage1_offgrid_entity }}"
+                    data:
+                      option: "{{ offgrid_on_option_value }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ storage1_offgrid_entity.startswith('switch.') and states(storage1_offgrid_entity) != 'on' }}"
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: "{{ storage1_offgrid_entity }}"
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ storage2_offgrid_entity.startswith('select.') and states(storage2_offgrid_entity) != offgrid_on_option_value }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: "{{ storage2_offgrid_entity }}"
+                    data:
+                      option: "{{ offgrid_on_option_value }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ storage2_offgrid_entity.startswith('switch.') and states(storage2_offgrid_entity) != 'on' }}"
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: "{{ storage2_offgrid_entity }}"
 
   - variables:
       normal_mode: >-
@@ -613,12 +815,14 @@ action:
         {{ (storage1_full | bool(false))
            and (storage2_can_charge | bool(false))
            and (storage1_can_discharge | bool(false))
-           and (storage1_soc_above_storage2 | bool(false)) }}
+           and (storage1_soc_above_storage2 | bool(false))
+           and (storage1_batt_charge_w | float(0)) >= (balance_transfer_min_w_value | float(50)) }}
       full_transfer_2_to_1: >-
         {{ (storage2_full | bool(false))
            and (storage1_can_charge | bool(false))
            and (storage2_can_discharge | bool(false))
-           and (storage2_soc_above_storage1 | bool(false)) }}
+           and (storage2_soc_above_storage1 | bool(false))
+           and (storage2_batt_charge_w | float(0)) >= (balance_transfer_min_w_value | float(50)) }}
       charge_imbalance_1_to_2: >-
         {{ (charge_diff_1_to_2_w | float(0)) >= (charge_imbalance_threshold_w_value | float(300))
            and (storage1_can_discharge | bool(false))
@@ -655,7 +859,7 @@ action:
   - variables:
       emergency_total_w: >-
         {% set low_count = (1 if (storage1_needs_grid_charge | bool(false)) else 0) + (1 if (storage2_needs_grid_charge | bool(false)) else 0) %}
-        {% set max_available = (storage1_max_charge_w_value | float(0) if (storage1_needs_grid_charge | bool(false)) else 0) + (storage2_max_charge_w_value | float(0) if (storage2_needs_grid_charge | bool(false)) else 0) %}
+        {% set max_available = (storage1_max_charge_w | float(0) if (storage1_needs_grid_charge | bool(false)) else 0) + (storage2_max_charge_w | float(0) if (storage2_needs_grid_charge | bool(false)) else 0) %}
         {% if (normal_mode | trim) == 'emergency' and low_count > 0 %}
           {{ [emergency_charge_w_value | float(300) * low_count, max_house_grid_power_w_value | float(1000), max_available] | min | round(0) }}
         {% else %}
@@ -677,9 +881,9 @@ action:
         {% endif %}
       emergency_transfer_w: >-
         {% if emergency_transfer_1_to_2 | bool(false) %}
-          {{ [emergency_charge_w_value | float(300), max_house_grid_power_w_value | float(1000), storage1_max_discharge_w_value | float(0), storage2_max_charge_w_value | float(0)] | min | round(0) }}
+          {{ [emergency_charge_w_value | float(300), max_house_grid_power_w_value | float(1000), storage1_max_discharge_w | float(0), storage2_max_charge_w | float(0)] | min | round(0) }}
         {% elif emergency_transfer_2_to_1 | bool(false) %}
-          {{ [emergency_charge_w_value | float(300), max_house_grid_power_w_value | float(1000), storage2_max_discharge_w_value | float(0), storage1_max_charge_w_value | float(0)] | min | round(0) }}
+          {{ [emergency_charge_w_value | float(300), max_house_grid_power_w_value | float(1000), storage2_max_discharge_w | float(0), storage1_max_charge_w | float(0)] | min | round(0) }}
         {% else %}
           0
         {% endif %}
@@ -688,7 +892,7 @@ action:
   - variables:
       no_balance_base_input_total_w: >-
         {% if (normal_mode | trim) == 'surplus' and (balance_direction | trim) == 'none' %}
-          {% set max_available = (storage1_max_charge_w_value | float(0) if (storage1_can_charge | bool(false)) else 0) + (storage2_max_charge_w_value | float(0) if (storage2_can_charge | bool(false)) else 0) %}
+          {% set max_available = (storage1_max_charge_w | float(0) if (storage1_can_charge | bool(false)) else 0) + (storage2_max_charge_w | float(0) if (storage2_can_charge | bool(false)) else 0) %}
           {{ [uncontrolled_surplus_w | float(0), max_house_grid_power_w_value | float(1000), max_available] | min | round(0) }}
         {% else %}
           0
@@ -709,7 +913,7 @@ action:
         {% endif %}
       no_balance_base_output_total_w: >-
         {% if (normal_mode | trim) == 'import' and (balance_direction | trim) == 'none' %}
-          {% set max_available = (storage1_max_discharge_w_value | float(0) if (storage1_can_discharge | bool(false)) else 0) + (storage2_max_discharge_w_value | float(0) if (storage2_can_discharge | bool(false)) else 0) %}
+          {% set max_available = (storage1_max_discharge_w | float(0) if (storage1_can_discharge | bool(false)) else 0) + (storage2_max_discharge_w | float(0) if (storage2_can_discharge | bool(false)) else 0) %}
           {{ [uncontrolled_import_w | float(0), max_house_grid_power_w_value | float(1000), max_available] | min | round(0) }}
         {% else %}
           0
@@ -745,28 +949,28 @@ action:
       no_balance_storage1_input_w: >-
         {% if (no_balance_base_input_total_w | float(0)) > 0 and (storage1_can_charge | bool(false)) %}
           {% set split = (no_balance_base_input_total_w | float(0)) * (no_balance_input_weight_1 | float(0)) / ([no_balance_input_weight_total | float(0), 1] | max) %}
-          {{ [storage1_max_charge_w_value | float(0), split] | min | round(0) }}
+          {{ [storage1_max_charge_w | float(0), split] | min | round(0) }}
         {% else %}
           0
         {% endif %}
       no_balance_storage2_input_w: >-
         {% if (no_balance_base_input_total_w | float(0)) > 0 and (storage2_can_charge | bool(false)) %}
           {% set split = (no_balance_base_input_total_w | float(0)) * (no_balance_input_weight_2 | float(0)) / ([no_balance_input_weight_total | float(0), 1] | max) %}
-          {{ [storage2_max_charge_w_value | float(0), split] | min | round(0) }}
+          {{ [storage2_max_charge_w | float(0), split] | min | round(0) }}
         {% else %}
           0
         {% endif %}
       no_balance_storage1_output_w: >-
         {% if (no_balance_base_output_total_w | float(0)) > 0 and (storage1_can_discharge | bool(false)) %}
           {% set split = (no_balance_base_output_total_w | float(0)) * (no_balance_output_weight_1 | float(0)) / ([no_balance_output_weight_total | float(0), 1] | max) %}
-          {{ [storage1_max_discharge_w_value | float(0), split] | min | round(0) }}
+          {{ [storage1_max_discharge_w | float(0), split] | min | round(0) }}
         {% else %}
           0
         {% endif %}
       no_balance_storage2_output_w: >-
         {% if (no_balance_base_output_total_w | float(0)) > 0 and (storage2_can_discharge | bool(false)) %}
           {% set split = (no_balance_base_output_total_w | float(0)) * (no_balance_output_weight_2 | float(0)) / ([no_balance_output_weight_total | float(0), 1] | max) %}
-          {{ [storage2_max_discharge_w_value | float(0), split] | min | round(0) }}
+          {{ [storage2_max_discharge_w | float(0), split] | min | round(0) }}
         {% else %}
           0
         {% endif %}
@@ -774,17 +978,17 @@ action:
   - variables:
       balance_source_max_discharge_w: >-
         {% if (balance_direction | trim) == '1_to_2' %}
-          {{ storage1_max_discharge_w_value | float(0) }}
+          {{ storage1_max_discharge_w | float(0) }}
         {% elif (balance_direction | trim) == '2_to_1' %}
-          {{ storage2_max_discharge_w_value | float(0) }}
+          {{ storage2_max_discharge_w | float(0) }}
         {% else %}
           0
         {% endif %}
       balance_target_max_charge_w: >-
         {% if (balance_direction | trim) == '1_to_2' %}
-          {{ storage2_max_charge_w_value | float(0) }}
+          {{ storage2_max_charge_w | float(0) }}
         {% elif (balance_direction | trim) == '2_to_1' %}
-          {{ storage1_max_charge_w_value | float(0) }}
+          {{ storage1_max_charge_w | float(0) }}
         {% else %}
           0
         {% endif %}
@@ -856,9 +1060,9 @@ action:
           {{ emergency_transfer_w | float(0) | round(0) }}
         {% elif (normal_mode | trim) == 'emergency' and (storage1_needs_grid_charge | bool(false)) and not (emergency_transfer_2_to_1 | bool(false)) %}
           {% set split = (emergency_total_w | float(0)) * (emergency_weight_1 | float(0)) / ([emergency_weight_total | float(0), 1] | max) %}
-          {{ [storage1_max_charge_w_value | float(0), split] | min | round(0) }}
+          {{ [storage1_max_charge_w | float(0), split] | min | round(0) }}
         {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == '2_to_1' %}
-          {{ ([storage1_max_charge_w_value | float(0), (balance_base_target_input_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
+          {{ ([storage1_max_charge_w | float(0), (balance_base_target_input_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
         {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == 'none' %}
           {{ no_balance_storage1_input_w | float(0) | round(0) }}
         {% else %}
@@ -869,9 +1073,9 @@ action:
           {{ emergency_transfer_w | float(0) | round(0) }}
         {% elif (normal_mode | trim) == 'emergency' and (storage2_needs_grid_charge | bool(false)) and not (emergency_transfer_1_to_2 | bool(false)) %}
           {% set split = (emergency_total_w | float(0)) * (emergency_weight_2 | float(0)) / ([emergency_weight_total | float(0), 1] | max) %}
-          {{ [storage2_max_charge_w_value | float(0), split] | min | round(0) }}
+          {{ [storage2_max_charge_w | float(0), split] | min | round(0) }}
         {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == '1_to_2' %}
-          {{ ([storage2_max_charge_w_value | float(0), (balance_base_target_input_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
+          {{ ([storage2_max_charge_w | float(0), (balance_base_target_input_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
         {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == 'none' %}
           {{ no_balance_storage2_input_w | float(0) | round(0) }}
         {% else %}
@@ -881,7 +1085,7 @@ action:
         {% if (normal_mode | trim) == 'emergency' and (emergency_transfer_1_to_2 | bool(false)) %}
           {{ emergency_transfer_w | float(0) | round(0) }}
         {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == '1_to_2' %}
-          {{ ([storage1_max_discharge_w_value | float(0), (balance_base_source_output_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
+          {{ ([storage1_max_discharge_w | float(0), (balance_base_source_output_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
         {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == 'none' %}
           {{ no_balance_storage1_output_w | float(0) | round(0) }}
         {% else %}
@@ -891,7 +1095,7 @@ action:
         {% if (normal_mode | trim) == 'emergency' and (emergency_transfer_2_to_1 | bool(false)) %}
           {{ emergency_transfer_w | float(0) | round(0) }}
         {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == '2_to_1' %}
-          {{ ([storage2_max_discharge_w_value | float(0), (balance_base_source_output_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
+          {{ ([storage2_max_discharge_w | float(0), (balance_base_source_output_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
         {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == 'none' %}
           {{ no_balance_storage2_output_w | float(0) | round(0) }}
         {% else %}
@@ -937,7 +1141,7 @@ action:
         sequence:
           - service: number.set_value
             target:
-              entity_id: !input inverter_active_power_regulation_number
+              entity_id: "{{ inverter_active_power_regulation_entity }}"
             data:
               value: "{{ inverter_target_percent | float(0) }}"
 
@@ -950,7 +1154,7 @@ action:
         sequence:
           - service: number.set_value
             target:
-              entity_id: !input storage1_input_limit_number
+              entity_id: "{{ storage1_input_number_entity }}"
             data:
               value: "{{ storage1_target_input_w | float(0) }}"
   - choose:
@@ -962,7 +1166,7 @@ action:
         sequence:
           - service: number.set_value
             target:
-              entity_id: !input storage1_output_limit_number
+              entity_id: "{{ storage1_output_number_entity }}"
             data:
               value: "{{ storage1_target_output_w | float(0) }}"
   - choose:
@@ -974,7 +1178,7 @@ action:
         sequence:
           - service: select.select_option
             target:
-              entity_id: !input storage1_ac_mode_select
+              entity_id: "{{ storage1_ac_select_entity }}"
             data:
               option: "{{ storage1_target_mode | trim }}"
 
@@ -987,7 +1191,7 @@ action:
         sequence:
           - service: number.set_value
             target:
-              entity_id: !input storage2_input_limit_number
+              entity_id: "{{ storage2_input_number_entity }}"
             data:
               value: "{{ storage2_target_input_w | float(0) }}"
   - choose:
@@ -999,7 +1203,7 @@ action:
         sequence:
           - service: number.set_value
             target:
-              entity_id: !input storage2_output_limit_number
+              entity_id: "{{ storage2_output_number_entity }}"
             data:
               value: "{{ storage2_target_output_w | float(0) }}"
   - choose:
@@ -1011,6 +1215,6 @@ action:
         sequence:
           - service: select.select_option
             target:
-              entity_id: !input storage2_ac_mode_select
+              entity_id: "{{ storage2_ac_select_entity }}"
             data:
               option: "{{ storage2_target_mode | trim }}"
