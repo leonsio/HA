@@ -1,0 +1,1016 @@
+blueprint:
+  name: Generische Nulleinspeisung mit 2 Speichern und Wechselrichter
+  description: >-
+    Regelt zwei generische Speichersysteme, Speicher 1 und Speicher 2, zusammen
+    mit einem Wechselrichter auf möglichst geringe Einspeisung. Die
+    Netzleistung wird z. B. von einem Shelly Pro 3EM geliefert. Positive
+    Netzleistung wird als Netzbezug interpretiert, negative Netzleistung als
+    Einspeisung. Die Regelung läuft alle 5 Sekunden, verteilt Lade- und
+    Entladeleistung anhand SoC, automatisch gelesener Gesamtkapazität
+    _total_kwh und aktueller Batterieladeleistung. Die Wechselrichterbegrenzung
+    wird generisch über die Solarman-Number _active_power_regulation als
+    Prozentwert gesetzt. Wenn beide Speicher voll sind, wird der Wechselrichter
+    gedrosselt. Wenn ein Speicher wieder Kapazität frei hat, wird der
+    Wechselrichter wieder entdrosselt. Zusätzlich kann der Speicher mit deutlich
+    höherer Batterieladeleistung einen Teil dieser Leistung über das Hausnetz an
+    den schwächer geladenen Speicher weitergeben. Dadurch funktioniert der
+    Ausgleich nicht nur bei vollem Speicher, sondern auch bei asymmetrischer
+    Ladeleistung. Ein Speicher-zu-Speicher-Ausgleich wird nur freigegeben,
+    wenn der annehmende Speicher einen niedrigeren SoC als der abgebende
+    Speicher hat. Der zusätzliche Transfer wird zudem durch den gemessenen
+    Ladeleistungsueberschuss des abgebenden Speichers begrenzt, damit nicht
+    planmaessig gespeicherte Energie verschoben wird. Die Leistung über das
+    Hausnetz ist konfigurierbar und standardmäßig auf 1000 W begrenzt. Bei
+    Notaufladung gibt ein Speicher nur dann Energie an den anderen Speicher ab,
+    wenn sein SoC mindestens um die konfigurierte Reserve über dem
+    Notlade-SoC-Limit liegt und höher ist als der SoC des annehmenden Speichers;
+    andernfalls wird aus dem Netz geladen. Der Off-Grid-Port von Speicher 2
+    wird deaktiviert, wenn der Wechselrichter nicht erreichbar ist, und wieder
+    aktiviert, sobald der Wechselrichter erreichbar ist.
+  domain: automation
+  input:
+    grid_power_sensor:
+      name: Netzanschluss - Gesamtleistung
+      description: >-
+        Sensor in Watt, z. B. Shelly Pro 3EM Gesamtleistung. Erwartet:
+        positiv = Netzbezug, negativ = Einspeisung. Falls der Sensor andersherum
+        zählt, die Option Vorzeichen invertieren aktivieren.
+      selector:
+        entity:
+          domain: sensor
+    invert_grid_sign:
+      name: Netzleistung Vorzeichen invertieren
+      default: false
+      selector:
+        boolean: {}
+
+    storage1_soc_sensor:
+      name: Speicher 1 - SoC Sensor
+      selector:
+        entity:
+          domain: sensor
+    storage1_battery_charge_power_sensor:
+      name: Speicher 1 - Batterieladeleistung Sensor
+      description: >-
+        Aktuelle Batterieladeleistung in Watt. Dieser Wert wird verwendet, um
+        bei deutlich ungleicher Ladeleistung den stärker geladenen Speicher als
+        Quelle und den schwächer geladenen Speicher als Ziel zu bestimmen.
+      selector:
+        entity:
+          domain: sensor
+    storage1_total_kwh_sensor:
+      name: Speicher 1 - Gesamtkapazität _total_kwh
+      description: >-
+        Sensor mit der Gesamtkapazität des Speichers in kWh. Der Wert muss vom
+        Typ float bzw. numerisch sein und wird intern in Wh umgerechnet.
+      selector:
+        entity:
+          domain: sensor
+    storage1_ac_mode_select:
+      name: Speicher 1 - AC-Modus Select
+      selector:
+        entity:
+          domain: select
+    storage1_input_limit_number:
+      name: Speicher 1 - Ladeleistung/Input Limit Number
+      selector:
+        entity:
+          domain: number
+    storage1_output_limit_number:
+      name: Speicher 1 - Entladeleistung/Output Limit Number
+      selector:
+        entity:
+          domain: number
+    storage1_max_charge_w:
+      name: Speicher 1 - maximale Ladeleistung
+      default: 800
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+    storage1_max_discharge_w:
+      name: Speicher 1 - maximale Entladeleistung
+      default: 800
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+
+    storage2_soc_sensor:
+      name: Speicher 2 - SoC Sensor
+      selector:
+        entity:
+          domain: sensor
+    storage2_battery_charge_power_sensor:
+      name: Speicher 2 - Batterieladeleistung Sensor
+      description: >-
+        Aktuelle Batterieladeleistung in Watt. Dieser Wert wird verwendet, um
+        bei deutlich ungleicher Ladeleistung den stärker geladenen Speicher als
+        Quelle und den schwächer geladenen Speicher als Ziel zu bestimmen.
+      selector:
+        entity:
+          domain: sensor
+    storage2_total_kwh_sensor:
+      name: Speicher 2 - Gesamtkapazität _total_kwh
+      description: >-
+        Sensor mit der Gesamtkapazität des Speichers in kWh. Der Wert muss vom
+        Typ float bzw. numerisch sein und wird intern in Wh umgerechnet.
+      selector:
+        entity:
+          domain: sensor
+    storage2_ac_mode_select:
+      name: Speicher 2 - AC-Modus Select
+      selector:
+        entity:
+          domain: select
+    storage2_input_limit_number:
+      name: Speicher 2 - Ladeleistung/Input Limit Number
+      selector:
+        entity:
+          domain: number
+    storage2_output_limit_number:
+      name: Speicher 2 - Entladeleistung/Output Limit Number
+      selector:
+        entity:
+          domain: number
+    storage2_offgrid_switch:
+      name: Speicher 2 - Off-Grid-Port Switch
+      description: >-
+        Switch für den Off-Grid-Port, an dem der Wechselrichter angeschlossen
+        ist. Wird ausgeschaltet, wenn der Wechselrichter nicht erreichbar ist,
+        und wieder eingeschaltet, sobald der Wechselrichter erreichbar ist.
+      selector:
+        entity:
+          domain: switch
+    storage2_max_charge_w:
+      name: Speicher 2 - maximale Ladeleistung
+      default: 1200
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+    storage2_max_discharge_w:
+      name: Speicher 2 - maximale Entladeleistung
+      default: 1200
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+
+    inverter_active_power_regulation_number:
+      name: Wechselrichter - Solarman _active_power_regulation
+      description: >-
+        Number-Entität der Solarman-Integration für den Einstellungsparameter
+        _active_power_regulation. Erwartet wird ein Prozentwert von 0 bis 100.
+      selector:
+        entity:
+          domain: number
+    inverter_reachable_entity:
+      name: Wechselrichter - Erreichbarkeit/Status Entity
+      description: >-
+        Entity, deren Status die Erreichbarkeit beschreibt. Als nicht erreichbar
+        gelten unknown, unavailable, off, offline, false, not_connected,
+        unreachable und problem. Falls keine separate Status-Entity vorhanden
+        ist, kann ersatzweise die Solarman-Number _active_power_regulation
+        gewählt werden; ein gültiger Prozentwert, auch 0, gilt dann als
+        erreichbar.
+      selector:
+        entity: {}
+    inverter_max_w:
+      name: Wechselrichter - maximale AC-Leistung
+      description: >-
+        Benutzerdefinierte maximale Wechselrichterleistung in Watt. Aus diesem
+        Wert wird die Prozentbegrenzung für _active_power_regulation berechnet.
+        Beispiel: 2000 W Maximalleistung und Ziel 1000 W ergeben 50 Prozent.
+      default: 2000
+      selector:
+        number:
+          min: 100
+          max: 20000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+    inverter_min_w:
+      name: Wechselrichter - minimale erlaubte Leistung
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+    inverter_ramp_w:
+      name: Wechselrichter - Drossel-/Entdrossel-Schritt je Regelzyklus
+      default: 100
+      selector:
+        number:
+          min: 10
+          max: 2000
+          step: 10
+          unit_of_measurement: W
+          mode: slider
+    inverter_unthrottle_soc:
+      name: Wechselrichter wieder entdrosseln unter SoC
+      default: 96
+      selector:
+        number:
+          min: 50
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+
+    storage_input_option:
+      name: Speicher AC-Modus Option für Laden
+      description: >-
+        Exakter Optionsname der Select-Entität für Laden aus dem Hausnetz.
+        Beispiele je nach Integration: input, INPUT, charge oder Charge.
+      default: input
+      selector:
+        text: {}
+    storage_output_option:
+      name: Speicher AC-Modus Option für Entladen
+      description: >-
+        Exakter Optionsname der Select-Entität für Entladen in das Hausnetz.
+        Beispiele je nach Integration: output, OUTPUT, discharge oder Discharge.
+      default: output
+      selector:
+        text: {}
+
+    max_house_grid_power_w:
+      name: Maximale Leistung über das Hausnetz
+      description: >-
+        Maximale Lade- oder Entladeleistung, die über das Hausnetz für
+        Speicherladung, Speicherentladung oder Speicher-zu-Speicher-Transfer
+        genutzt wird. Default 1000 W. Beim Transfer wird die Quellleistung und
+        Ziel-Ladeleistung jeweils auf diesen Wert begrenzt.
+      default: 1000
+      selector:
+        number:
+          min: 100
+          max: 5000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+    zero_tolerance_w:
+      name: Totband um Nulleinspeisung
+      default: 40
+      selector:
+        number:
+          min: 0
+          max: 300
+          step: 5
+          unit_of_measurement: W
+          mode: slider
+    min_change_w:
+      name: Mindest-Änderung für neue Leistungsvorgabe
+      default: 20
+      selector:
+        number:
+          min: 1
+          max: 200
+          step: 1
+          unit_of_measurement: W
+          mode: slider
+
+    full_soc:
+      name: Speicher gilt als voll ab SoC
+      default: 98
+      selector:
+        number:
+          min: 80
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+    reserve_soc:
+      name: Entlade-Reserve SoC
+      default: 15
+      selector:
+        number:
+          min: 0
+          max: 80
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+    grid_charge_soc:
+      name: Netz-Nachladen starten unter SoC
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 80
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+    grid_charge_stop_soc:
+      name: Netz-Nachladen fortsetzen bis SoC
+      default: 20
+      selector:
+        number:
+          min: 1
+          max: 90
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+    emergency_charge_w:
+      name: Notladeleistung je niedrigem Speicher
+      default: 300
+      selector:
+        number:
+          min: 50
+          max: 2000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+    mutual_emergency_soc_margin:
+      name: Reserve für gegenseitige Notaufladung über SoC-Limit
+      description: >-
+        Ein Speicher darf einen anderen Speicher zur Notaufladung über das
+        Hausnetz nur versorgen, wenn sein SoC mindestens um diesen Wert über
+        dem Netz-Nachladen-Start-SoC liegt. Default: 20 Prozentpunkte. Beispiel:
+        Start unter 10 Prozent und Reserve 20 bedeutet, dass der gebende
+        Speicher mindestens 30 Prozent SoC haben muss. Andernfalls wird aus dem
+        Netz geladen.
+      default: 20
+      selector:
+        number:
+          min: 0
+          max: 80
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+    charge_imbalance_threshold_w:
+      name: Ladeleistungs-Differenz für Speicher-Ausgleich
+      description: >-
+        Erst wenn die Batterieladeleistung eines Speichers um mindestens diesen
+        Wert höher ist als die des anderen Speichers, wird ein zusätzlicher
+        Speicher-zu-Speicher-Ausgleich über das Hausnetz aktiviert. Beispiel:
+        Speicher 2 lädt mit 2000 W, Speicher 1 mit 1000 W, Schwellwert 300 W:
+        der Ausgleich wird aktiviert.
+      default: 300
+      selector:
+        number:
+          min: 0
+          max: 3000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+    charge_imbalance_transfer_factor:
+      name: Anteil der Ladeleistungs-Differenz übertragen
+      description: >-
+        Prozentualer Anteil der gemessenen Ladeleistungs-Differenz, der über
+        das Hausnetz vom stärker geladenen Speicher zum schwächer geladenen
+        Speicher übertragen wird. 50 Prozent gleicht die Ladeleistungen
+        rechnerisch an: 2000 W gegen 1000 W ergibt ca. 500 W Transfer.
+      default: 50
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 5
+          unit_of_measurement: "%"
+          mode: slider
+    balance_transfer_min_w:
+      name: Mindestleistung für Speicher-Ausgleich
+      description: >-
+        Unterhalb dieser berechneten Transferleistung wird kein zusätzlicher
+        Speicher-zu-Speicher-Ausgleich gestartet.
+      default: 50
+      selector:
+        number:
+          min: 0
+          max: 500
+          step: 10
+          unit_of_measurement: W
+          mode: slider
+    balance_soc_margin:
+      name: Mindest-SoC-Vorsprung des abgebenden Speichers
+      description: >-
+        Speicher-zu-Speicher-Ausgleich über das Hausnetz wird nur freigegeben,
+        wenn der abgebende Speicher um mindestens diesen Wert mehr SoC hat als
+        der annehmende Speicher. Default 0 bedeutet: der annehmende Speicher
+        muss nur niedriger sein als der abgebende Speicher.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 20
+          step: 0.5
+          unit_of_measurement: "%"
+          mode: slider
+
+trigger:
+  - platform: time_pattern
+    seconds: "/5"
+
+condition: []
+
+variables:
+  blueprint_version: "2026-05-21-generic-balance-v3"
+
+mode: single
+max_exceeded: silent
+
+action:
+  - variables:
+      grid_power_sensor_entity: !input grid_power_sensor
+      invert_grid_sign_value: !input invert_grid_sign
+
+      storage1_soc_sensor_entity: !input storage1_soc_sensor
+      storage1_battery_charge_power_sensor_entity: !input storage1_battery_charge_power_sensor
+      storage1_total_kwh_sensor_entity: !input storage1_total_kwh_sensor
+      storage1_ac_select_entity: !input storage1_ac_mode_select
+      storage1_input_number_entity: !input storage1_input_limit_number
+      storage1_output_number_entity: !input storage1_output_limit_number
+      storage1_max_charge_w_value: !input storage1_max_charge_w
+      storage1_max_discharge_w_value: !input storage1_max_discharge_w
+
+      storage2_soc_sensor_entity: !input storage2_soc_sensor
+      storage2_battery_charge_power_sensor_entity: !input storage2_battery_charge_power_sensor
+      storage2_total_kwh_sensor_entity: !input storage2_total_kwh_sensor
+      storage2_ac_select_entity: !input storage2_ac_mode_select
+      storage2_input_number_entity: !input storage2_input_limit_number
+      storage2_output_number_entity: !input storage2_output_limit_number
+      storage2_offgrid_switch_entity: !input storage2_offgrid_switch
+      storage2_max_charge_w_value: !input storage2_max_charge_w
+      storage2_max_discharge_w_value: !input storage2_max_discharge_w
+
+      inverter_active_power_regulation_entity: !input inverter_active_power_regulation_number
+      inverter_reachable_entity_id: !input inverter_reachable_entity
+      inverter_max_w_value: !input inverter_max_w
+      inverter_min_w_value: !input inverter_min_w
+      inverter_ramp_w_value: !input inverter_ramp_w
+      inverter_unthrottle_soc_value: !input inverter_unthrottle_soc
+
+      storage_input_option_value: !input storage_input_option
+      storage_output_option_value: !input storage_output_option
+      max_house_grid_power_w_value: !input max_house_grid_power_w
+      zero_tolerance_w_value: !input zero_tolerance_w
+      min_change_w_value: !input min_change_w
+      full_soc_value: !input full_soc
+      reserve_soc_value: !input reserve_soc
+      grid_charge_soc_value: !input grid_charge_soc
+      grid_charge_stop_soc_value: !input grid_charge_stop_soc
+      emergency_charge_w_value: !input emergency_charge_w
+      mutual_emergency_soc_margin_value: !input mutual_emergency_soc_margin
+      charge_imbalance_threshold_w_value: !input charge_imbalance_threshold_w
+      charge_imbalance_transfer_factor_value: !input charge_imbalance_transfer_factor
+      balance_transfer_min_w_value: !input balance_transfer_min_w
+      balance_soc_margin_value: !input balance_soc_margin
+
+  - variables:
+      grid_power_w: >-
+        {% set p = states(grid_power_sensor_entity) | float(0) %}
+        {{ (p * (-1 if invert_grid_sign_value else 1)) | round(0) }}
+      storage1_soc: "{{ states(storage1_soc_sensor_entity) | float(0) }}"
+      storage2_soc: "{{ states(storage2_soc_sensor_entity) | float(0) }}"
+      storage1_batt_charge_w: "{{ [states(storage1_battery_charge_power_sensor_entity) | float(0), 0] | max }}"
+      storage2_batt_charge_w: "{{ [states(storage2_battery_charge_power_sensor_entity) | float(0), 0] | max }}"
+      storage1_total_kwh: "{{ states(storage1_total_kwh_sensor_entity) | float(0) }}"
+      storage2_total_kwh: "{{ states(storage2_total_kwh_sensor_entity) | float(0) }}"
+      storage1_capacity_wh: "{{ ([states(storage1_total_kwh_sensor_entity) | float(0), 0.001] | max * 1000) | round(0) }}"
+      storage2_capacity_wh: "{{ ([states(storage2_total_kwh_sensor_entity) | float(0), 0.001] | max * 1000) | round(0) }}"
+      storage1_current_input_w: "{{ states(storage1_input_number_entity) | float(0) }}"
+      storage1_current_output_w: "{{ states(storage1_output_number_entity) | float(0) }}"
+      storage2_current_input_w: "{{ states(storage2_input_number_entity) | float(0) }}"
+      storage2_current_output_w: "{{ states(storage2_output_number_entity) | float(0) }}"
+      inverter_current_percent: >-
+        {{ [100, [0, states(inverter_active_power_regulation_entity) | float(100)] | max] | min }}
+      inverter_current_w: >-
+        {{ ((inverter_current_percent | float(100)) / 100 * (inverter_max_w_value | float(1))) | round(0) }}
+
+  - variables:
+      critical_sensor_unavailable: >-
+        {{ states(grid_power_sensor_entity) in ['unknown', 'unavailable', 'none']
+           or states(storage1_soc_sensor_entity) in ['unknown', 'unavailable', 'none']
+           or states(storage2_soc_sensor_entity) in ['unknown', 'unavailable', 'none']
+           or states(storage1_total_kwh_sensor_entity) in ['unknown', 'unavailable', 'none']
+           or states(storage2_total_kwh_sensor_entity) in ['unknown', 'unavailable', 'none']
+           or (storage1_total_kwh | float(0)) <= 0
+           or (storage2_total_kwh | float(0)) <= 0 }}
+      inverter_unavailable: >-
+        {% set s = states(inverter_reachable_entity_id) | lower %}
+        {{ s in ['unknown', 'unavailable', 'none', 'off', 'false', 'offline',
+                 'not_connected', 'not connected', 'unreachable', 'problem'] }}
+      current_input_total_w: "{{ (storage1_current_input_w | float(0) + storage2_current_input_w | float(0)) | round(0) }}"
+      current_output_total_w: "{{ (storage1_current_output_w | float(0) + storage2_current_output_w | float(0)) | round(0) }}"
+      uncontrolled_grid_power_w: >-
+        {{ ((grid_power_w | float(0)) - (current_input_total_w | float(0)) + (current_output_total_w | float(0))) | round(0) }}
+      uncontrolled_import_w: "{{ [0, uncontrolled_grid_power_w | float(0)] | max | round(0) }}"
+      uncontrolled_surplus_w: "{{ [0, 0 - (uncontrolled_grid_power_w | float(0))] | max | round(0) }}"
+      storage1_full: "{{ (storage1_soc | float(0)) >= (full_soc_value | float(98)) }}"
+      storage2_full: "{{ (storage2_soc | float(0)) >= (full_soc_value | float(98)) }}"
+      storage1_can_charge: "{{ (storage1_soc | float(0)) < ((full_soc_value | float(98)) - 0.5) }}"
+      storage2_can_charge: "{{ (storage2_soc | float(0)) < ((full_soc_value | float(98)) - 0.5) }}"
+      storage1_can_discharge: "{{ (storage1_soc | float(0)) > (reserve_soc_value | float(15)) }}"
+      storage2_can_discharge: "{{ (storage2_soc | float(0)) > (reserve_soc_value | float(15)) }}"
+      storage1_needs_grid_charge: >-
+        {{ (storage1_soc | float(0)) <= (grid_charge_soc_value | float(10))
+           or ((storage1_soc | float(0)) < (grid_charge_stop_soc_value | float(20))
+               and states(storage1_ac_select_entity) == storage_input_option_value
+               and (storage1_current_input_w | float(0)) > (min_change_w_value | float(20))) }}
+      storage2_needs_grid_charge: >-
+        {{ (storage2_soc | float(0)) <= (grid_charge_soc_value | float(10))
+           or ((storage2_soc | float(0)) < (grid_charge_stop_soc_value | float(20))
+               and states(storage2_ac_select_entity) == storage_input_option_value
+               and (storage2_current_input_w | float(0)) > (min_change_w_value | float(20))) }}
+      storage1_can_support_emergency: >-
+        {{ (storage1_can_discharge | bool(false)) and
+           (storage1_soc | float(0)) >= ((grid_charge_soc_value | float(10)) + (mutual_emergency_soc_margin_value | float(20))) }}
+      storage2_can_support_emergency: >-
+        {{ (storage2_can_discharge | bool(false)) and
+           (storage2_soc | float(0)) >= ((grid_charge_soc_value | float(10)) + (mutual_emergency_soc_margin_value | float(20))) }}
+      storage1_soc_above_storage2: >-
+        {{ (storage1_soc | float(0)) > ((storage2_soc | float(0)) + (balance_soc_margin_value | float(0))) }}
+      storage2_soc_above_storage1: >-
+        {{ (storage2_soc | float(0)) > ((storage1_soc | float(0)) + (balance_soc_margin_value | float(0))) }}
+      storage1_charge_surplus_over_storage2_w: >-
+        {{ [0, (storage1_batt_charge_w | float(0)) - (storage2_batt_charge_w | float(0))] | max | round(0) }}
+      storage2_charge_surplus_over_storage1_w: >-
+        {{ [0, (storage2_batt_charge_w | float(0)) - (storage1_batt_charge_w | float(0))] | max | round(0) }}
+      emergency_transfer_1_to_2: >-
+        {{ (storage2_needs_grid_charge | bool(false))
+           and not (storage1_needs_grid_charge | bool(false))
+           and (storage1_can_support_emergency | bool(false))
+           and (storage1_soc_above_storage2 | bool(false)) }}
+      emergency_transfer_2_to_1: >-
+        {{ (storage1_needs_grid_charge | bool(false))
+           and not (storage2_needs_grid_charge | bool(false))
+           and (storage2_can_support_emergency | bool(false))
+           and (storage2_soc_above_storage1 | bool(false)) }}
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ critical_sensor_unavailable | bool(false) }}"
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input storage1_input_limit_number
+            data:
+              value: 0
+          - service: number.set_value
+            target:
+              entity_id: !input storage1_output_limit_number
+            data:
+              value: 0
+          - service: number.set_value
+            target:
+              entity_id: !input storage2_input_limit_number
+            data:
+              value: 0
+          - service: number.set_value
+            target:
+              entity_id: !input storage2_output_limit_number
+            data:
+              value: 0
+          - stop: Kritischer Sensor für die Nulleinspeisung ist nicht verfügbar.
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ (inverter_unavailable | bool(false)) and states(storage2_offgrid_switch_entity) != 'off' }}"
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id: !input storage2_offgrid_switch
+      - conditions:
+          - condition: template
+            value_template: "{{ not (inverter_unavailable | bool(false)) and states(storage2_offgrid_switch_entity) != 'on' }}"
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id: !input storage2_offgrid_switch
+
+  - variables:
+      normal_mode: >-
+        {% if (storage1_needs_grid_charge | bool(false)) or (storage2_needs_grid_charge | bool(false)) %}
+          emergency
+        {% elif (uncontrolled_surplus_w | float(0)) > (zero_tolerance_w_value | float(40)) and ((storage1_can_charge | bool(false)) or (storage2_can_charge | bool(false))) %}
+          surplus
+        {% elif (uncontrolled_import_w | float(0)) > (zero_tolerance_w_value | float(40)) and ((storage1_can_discharge | bool(false)) or (storage2_can_discharge | bool(false))) %}
+          import
+        {% else %}
+          idle
+        {% endif %}
+      charge_diff_1_to_2_w: "{{ ((storage1_batt_charge_w | float(0)) - (storage2_batt_charge_w | float(0))) | round(0) }}"
+      charge_diff_2_to_1_w: "{{ ((storage2_batt_charge_w | float(0)) - (storage1_batt_charge_w | float(0))) | round(0) }}"
+      full_transfer_1_to_2: >-
+        {{ (storage1_full | bool(false))
+           and (storage2_can_charge | bool(false))
+           and (storage1_can_discharge | bool(false))
+           and (storage1_soc_above_storage2 | bool(false)) }}
+      full_transfer_2_to_1: >-
+        {{ (storage2_full | bool(false))
+           and (storage1_can_charge | bool(false))
+           and (storage2_can_discharge | bool(false))
+           and (storage2_soc_above_storage1 | bool(false)) }}
+      charge_imbalance_1_to_2: >-
+        {{ (charge_diff_1_to_2_w | float(0)) >= (charge_imbalance_threshold_w_value | float(300))
+           and (storage1_can_discharge | bool(false))
+           and (storage2_can_charge | bool(false))
+           and (storage1_soc_above_storage2 | bool(false)) }}
+      charge_imbalance_2_to_1: >-
+        {{ (charge_diff_2_to_1_w | float(0)) >= (charge_imbalance_threshold_w_value | float(300))
+           and (storage2_can_discharge | bool(false))
+           and (storage1_can_charge | bool(false))
+           and (storage2_soc_above_storage1 | bool(false)) }}
+      balance_direction: >-
+        {% if (storage1_needs_grid_charge | bool(false)) or (storage2_needs_grid_charge | bool(false)) %}
+          none
+        {% elif (full_transfer_1_to_2 | bool(false)) %}
+          1_to_2
+        {% elif (full_transfer_2_to_1 | bool(false)) %}
+          2_to_1
+        {% elif (charge_imbalance_1_to_2 | bool(false)) %}
+          1_to_2
+        {% elif (charge_imbalance_2_to_1 | bool(false)) %}
+          2_to_1
+        {% else %}
+          none
+        {% endif %}
+      balance_reason: >-
+        {% if (full_transfer_1_to_2 | bool(false)) or (full_transfer_2_to_1 | bool(false)) %}
+          full
+        {% elif (charge_imbalance_1_to_2 | bool(false)) or (charge_imbalance_2_to_1 | bool(false)) %}
+          charge_imbalance
+        {% else %}
+          none
+        {% endif %}
+
+  - variables:
+      emergency_total_w: >-
+        {% set low_count = (1 if (storage1_needs_grid_charge | bool(false)) else 0) + (1 if (storage2_needs_grid_charge | bool(false)) else 0) %}
+        {% set max_available = (storage1_max_charge_w_value | float(0) if (storage1_needs_grid_charge | bool(false)) else 0) + (storage2_max_charge_w_value | float(0) if (storage2_needs_grid_charge | bool(false)) else 0) %}
+        {% if (normal_mode | trim) == 'emergency' and low_count > 0 %}
+          {{ [emergency_charge_w_value | float(300) * low_count, max_house_grid_power_w_value | float(1000), max_available] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      emergency_weight_1: >-
+        {% if storage1_needs_grid_charge | bool(false) %}
+          {% set d = [(grid_charge_stop_soc_value | float(20)) - (storage1_soc | float(0)), 1] | max %}
+          {{ (storage1_capacity_wh | float(1) * d) | round(2) }}
+        {% else %}
+          0
+        {% endif %}
+      emergency_weight_2: >-
+        {% if storage2_needs_grid_charge | bool(false) %}
+          {% set d = [(grid_charge_stop_soc_value | float(20)) - (storage2_soc | float(0)), 1] | max %}
+          {{ (storage2_capacity_wh | float(1) * d) | round(2) }}
+        {% else %}
+          0
+        {% endif %}
+      emergency_transfer_w: >-
+        {% if emergency_transfer_1_to_2 | bool(false) %}
+          {{ [emergency_charge_w_value | float(300), max_house_grid_power_w_value | float(1000), storage1_max_discharge_w_value | float(0), storage2_max_charge_w_value | float(0)] | min | round(0) }}
+        {% elif emergency_transfer_2_to_1 | bool(false) %}
+          {{ [emergency_charge_w_value | float(300), max_house_grid_power_w_value | float(1000), storage2_max_discharge_w_value | float(0), storage1_max_charge_w_value | float(0)] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      emergency_weight_total: "{{ (emergency_weight_1 | float(0)) + (emergency_weight_2 | float(0)) }}"
+
+  - variables:
+      no_balance_base_input_total_w: >-
+        {% if (normal_mode | trim) == 'surplus' and (balance_direction | trim) == 'none' %}
+          {% set max_available = (storage1_max_charge_w_value | float(0) if (storage1_can_charge | bool(false)) else 0) + (storage2_max_charge_w_value | float(0) if (storage2_can_charge | bool(false)) else 0) %}
+          {{ [uncontrolled_surplus_w | float(0), max_house_grid_power_w_value | float(1000), max_available] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      no_balance_input_weight_1: >-
+        {% if (normal_mode | trim) == 'surplus' and (balance_direction | trim) == 'none' and (storage1_can_charge | bool(false)) %}
+          {% set d = [(full_soc_value | float(98)) - (storage1_soc | float(0)), 0.1] | max %}
+          {{ (storage1_capacity_wh | float(1) * d) | round(2) }}
+        {% else %}
+          0
+        {% endif %}
+      no_balance_input_weight_2: >-
+        {% if (normal_mode | trim) == 'surplus' and (balance_direction | trim) == 'none' and (storage2_can_charge | bool(false)) %}
+          {% set d = [(full_soc_value | float(98)) - (storage2_soc | float(0)), 0.1] | max %}
+          {{ (storage2_capacity_wh | float(1) * d) | round(2) }}
+        {% else %}
+          0
+        {% endif %}
+      no_balance_base_output_total_w: >-
+        {% if (normal_mode | trim) == 'import' and (balance_direction | trim) == 'none' %}
+          {% set max_available = (storage1_max_discharge_w_value | float(0) if (storage1_can_discharge | bool(false)) else 0) + (storage2_max_discharge_w_value | float(0) if (storage2_can_discharge | bool(false)) else 0) %}
+          {{ [uncontrolled_import_w | float(0), max_house_grid_power_w_value | float(1000), max_available] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      no_balance_output_weight_1: >-
+        {% if (normal_mode | trim) == 'import' and (balance_direction | trim) == 'none' and (storage1_can_discharge | bool(false)) %}
+          {% set charge_sum = (storage1_batt_charge_w | float(0)) + (storage2_batt_charge_w | float(0)) %}
+          {% if charge_sum > 10 %}
+            {{ [storage1_batt_charge_w | float(0), 0] | max | round(2) }}
+          {% else %}
+            {% set d = [(storage1_soc | float(0)) - (reserve_soc_value | float(15)), 0.1] | max %}
+            {{ (storage1_capacity_wh | float(1) * d) | round(2) }}
+          {% endif %}
+        {% else %}
+          0
+        {% endif %}
+      no_balance_output_weight_2: >-
+        {% if (normal_mode | trim) == 'import' and (balance_direction | trim) == 'none' and (storage2_can_discharge | bool(false)) %}
+          {% set charge_sum = (storage1_batt_charge_w | float(0)) + (storage2_batt_charge_w | float(0)) %}
+          {% if charge_sum > 10 %}
+            {{ [storage2_batt_charge_w | float(0), 0] | max | round(2) }}
+          {% else %}
+            {% set d = [(storage2_soc | float(0)) - (reserve_soc_value | float(15)), 0.1] | max %}
+            {{ (storage2_capacity_wh | float(1) * d) | round(2) }}
+          {% endif %}
+        {% else %}
+          0
+        {% endif %}
+      no_balance_input_weight_total: "{{ (no_balance_input_weight_1 | float(0)) + (no_balance_input_weight_2 | float(0)) }}"
+      no_balance_output_weight_total: "{{ (no_balance_output_weight_1 | float(0)) + (no_balance_output_weight_2 | float(0)) }}"
+
+  - variables:
+      no_balance_storage1_input_w: >-
+        {% if (no_balance_base_input_total_w | float(0)) > 0 and (storage1_can_charge | bool(false)) %}
+          {% set split = (no_balance_base_input_total_w | float(0)) * (no_balance_input_weight_1 | float(0)) / ([no_balance_input_weight_total | float(0), 1] | max) %}
+          {{ [storage1_max_charge_w_value | float(0), split] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      no_balance_storage2_input_w: >-
+        {% if (no_balance_base_input_total_w | float(0)) > 0 and (storage2_can_charge | bool(false)) %}
+          {% set split = (no_balance_base_input_total_w | float(0)) * (no_balance_input_weight_2 | float(0)) / ([no_balance_input_weight_total | float(0), 1] | max) %}
+          {{ [storage2_max_charge_w_value | float(0), split] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      no_balance_storage1_output_w: >-
+        {% if (no_balance_base_output_total_w | float(0)) > 0 and (storage1_can_discharge | bool(false)) %}
+          {% set split = (no_balance_base_output_total_w | float(0)) * (no_balance_output_weight_1 | float(0)) / ([no_balance_output_weight_total | float(0), 1] | max) %}
+          {{ [storage1_max_discharge_w_value | float(0), split] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      no_balance_storage2_output_w: >-
+        {% if (no_balance_base_output_total_w | float(0)) > 0 and (storage2_can_discharge | bool(false)) %}
+          {% set split = (no_balance_base_output_total_w | float(0)) * (no_balance_output_weight_2 | float(0)) / ([no_balance_output_weight_total | float(0), 1] | max) %}
+          {{ [storage2_max_discharge_w_value | float(0), split] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+  - variables:
+      balance_source_max_discharge_w: >-
+        {% if (balance_direction | trim) == '1_to_2' %}
+          {{ storage1_max_discharge_w_value | float(0) }}
+        {% elif (balance_direction | trim) == '2_to_1' %}
+          {{ storage2_max_discharge_w_value | float(0) }}
+        {% else %}
+          0
+        {% endif %}
+      balance_target_max_charge_w: >-
+        {% if (balance_direction | trim) == '1_to_2' %}
+          {{ storage2_max_charge_w_value | float(0) }}
+        {% elif (balance_direction | trim) == '2_to_1' %}
+          {{ storage1_max_charge_w_value | float(0) }}
+        {% else %}
+          0
+        {% endif %}
+      balance_base_source_output_w: >-
+        {% if (balance_direction | trim) != 'none' and (uncontrolled_import_w | float(0)) > (zero_tolerance_w_value | float(40)) %}
+          {{ [uncontrolled_import_w | float(0), max_house_grid_power_w_value | float(1000), balance_source_max_discharge_w | float(0)] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      balance_base_target_input_w: >-
+        {% if (balance_direction | trim) != 'none' and (uncontrolled_surplus_w | float(0)) > (zero_tolerance_w_value | float(40)) %}
+          {{ [uncontrolled_surplus_w | float(0), max_house_grid_power_w_value | float(1000), balance_target_max_charge_w | float(0)] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      balance_source_measured_surplus_w: >-
+        {% if (balance_direction | trim) == '1_to_2' %}
+          {% if (balance_reason | trim) == 'charge_imbalance' %}
+            {{ storage1_charge_surplus_over_storage2_w | float(0) | round(0) }}
+          {% else %}
+            {{ [storage1_batt_charge_w | float(0), 0] | max | round(0) }}
+          {% endif %}
+        {% elif (balance_direction | trim) == '2_to_1' %}
+          {% if (balance_reason | trim) == 'charge_imbalance' %}
+            {{ storage2_charge_surplus_over_storage1_w | float(0) | round(0) }}
+          {% else %}
+            {{ [storage2_batt_charge_w | float(0), 0] | max | round(0) }}
+          {% endif %}
+        {% else %}
+          0
+        {% endif %}
+      balance_raw_desired_w: >-
+        {% if (balance_direction | trim) == '1_to_2' %}
+          {% if (balance_reason | trim) == 'full' %}
+            {{ max_house_grid_power_w_value | float(1000) }}
+          {% else %}
+            {{ ((charge_diff_1_to_2_w | float(0)) * (charge_imbalance_transfer_factor_value | float(50)) / 100) | round(0) }}
+          {% endif %}
+        {% elif (balance_direction | trim) == '2_to_1' %}
+          {% if (balance_reason | trim) == 'full' %}
+            {{ max_house_grid_power_w_value | float(1000) }}
+          {% else %}
+            {{ ((charge_diff_2_to_1_w | float(0)) * (charge_imbalance_transfer_factor_value | float(50)) / 100) | round(0) }}
+          {% endif %}
+        {% else %}
+          0
+        {% endif %}
+      balance_desired_w: >-
+        {% if (balance_raw_desired_w | float(0)) >= (balance_transfer_min_w_value | float(50)) %}
+          {{ balance_raw_desired_w | float(0) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      balance_transfer_w: >-
+        {% if (balance_direction | trim) != 'none' and (balance_desired_w | float(0)) > 0 %}
+          {% set source_room = [(balance_source_max_discharge_w | float(0)) - (balance_base_source_output_w | float(0)), 0] | max %}
+          {% set target_room = [(balance_target_max_charge_w | float(0)) - (balance_base_target_input_w | float(0)), 0] | max %}
+          {% set grid_output_room = [(max_house_grid_power_w_value | float(1000)) - (balance_base_source_output_w | float(0)), 0] | max %}
+          {% set grid_input_room = [(max_house_grid_power_w_value | float(1000)) - (balance_base_target_input_w | float(0)), 0] | max %}
+          {% set source_surplus_room = [(balance_source_measured_surplus_w | float(0)) - (balance_base_source_output_w | float(0)), 0] | max %}
+          {{ [balance_desired_w | float(0), source_room, target_room, grid_output_room, grid_input_room, source_surplus_room] | min | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+  - variables:
+      storage1_target_input_w: >-
+        {% if (normal_mode | trim) == 'emergency' and (emergency_transfer_2_to_1 | bool(false)) %}
+          {{ emergency_transfer_w | float(0) | round(0) }}
+        {% elif (normal_mode | trim) == 'emergency' and (storage1_needs_grid_charge | bool(false)) and not (emergency_transfer_2_to_1 | bool(false)) %}
+          {% set split = (emergency_total_w | float(0)) * (emergency_weight_1 | float(0)) / ([emergency_weight_total | float(0), 1] | max) %}
+          {{ [storage1_max_charge_w_value | float(0), split] | min | round(0) }}
+        {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == '2_to_1' %}
+          {{ ([storage1_max_charge_w_value | float(0), (balance_base_target_input_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
+        {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == 'none' %}
+          {{ no_balance_storage1_input_w | float(0) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      storage2_target_input_w: >-
+        {% if (normal_mode | trim) == 'emergency' and (emergency_transfer_1_to_2 | bool(false)) %}
+          {{ emergency_transfer_w | float(0) | round(0) }}
+        {% elif (normal_mode | trim) == 'emergency' and (storage2_needs_grid_charge | bool(false)) and not (emergency_transfer_1_to_2 | bool(false)) %}
+          {% set split = (emergency_total_w | float(0)) * (emergency_weight_2 | float(0)) / ([emergency_weight_total | float(0), 1] | max) %}
+          {{ [storage2_max_charge_w_value | float(0), split] | min | round(0) }}
+        {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == '1_to_2' %}
+          {{ ([storage2_max_charge_w_value | float(0), (balance_base_target_input_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
+        {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == 'none' %}
+          {{ no_balance_storage2_input_w | float(0) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      storage1_target_output_w: >-
+        {% if (normal_mode | trim) == 'emergency' and (emergency_transfer_1_to_2 | bool(false)) %}
+          {{ emergency_transfer_w | float(0) | round(0) }}
+        {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == '1_to_2' %}
+          {{ ([storage1_max_discharge_w_value | float(0), (balance_base_source_output_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
+        {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == 'none' %}
+          {{ no_balance_storage1_output_w | float(0) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      storage2_target_output_w: >-
+        {% if (normal_mode | trim) == 'emergency' and (emergency_transfer_2_to_1 | bool(false)) %}
+          {{ emergency_transfer_w | float(0) | round(0) }}
+        {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == '2_to_1' %}
+          {{ ([storage2_max_discharge_w_value | float(0), (balance_base_source_output_w | float(0)) + (balance_transfer_w | float(0))] | min) | round(0) }}
+        {% elif (normal_mode | trim) != 'emergency' and (balance_direction | trim) == 'none' %}
+          {{ no_balance_storage2_output_w | float(0) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+  - variables:
+      storage1_target_mode: >-
+        {% if (storage1_target_input_w | float(0)) > 0 %}
+          {{ storage_input_option_value }}
+        {% else %}
+          {{ storage_output_option_value }}
+        {% endif %}
+      storage2_target_mode: >-
+        {% if (storage2_target_input_w | float(0)) > 0 %}
+          {{ storage_input_option_value }}
+        {% else %}
+          {{ storage_output_option_value }}
+        {% endif %}
+      inverter_target_w: >-
+        {% set current = inverter_current_w | float(inverter_max_w_value) %}
+        {% if inverter_unavailable | bool(false) %}
+          {{ current | round(0) }}
+        {% elif (storage1_full | bool(false)) and (storage2_full | bool(false)) and (uncontrolled_surplus_w | float(0)) > (zero_tolerance_w_value | float(40)) %}
+          {% set step = [inverter_ramp_w_value | float(100), uncontrolled_surplus_w | float(0)] | min %}
+          {{ [inverter_min_w_value | float(0), current - step] | max | round(0) }}
+        {% elif (storage1_soc | float(0)) < (inverter_unthrottle_soc_value | float(96))
+              or (storage2_soc | float(0)) < (inverter_unthrottle_soc_value | float(96))
+              or (uncontrolled_import_w | float(0)) > (zero_tolerance_w_value | float(40)) %}
+          {{ [inverter_max_w_value | float(2000), current + (inverter_ramp_w_value | float(100))] | min | round(0) }}
+        {% else %}
+          {{ current | round(0) }}
+        {% endif %}
+      inverter_target_percent: >-
+        {{ ([100, [0, (inverter_target_w | float(0)) / ([inverter_max_w_value | float(1), 1] | max) * 100] | max] | min) | round(0) }}
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ not (inverter_unavailable | bool(false)) and
+                 ((states(inverter_active_power_regulation_entity) | float(0) - (inverter_target_percent | float(0))) | abs) >= 1 }}
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input inverter_active_power_regulation_number
+            data:
+              value: "{{ inverter_target_percent | float(0) }}"
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ ((states(storage1_input_number_entity) | float(0) - (storage1_target_input_w | float(0))) | abs)
+                 >= (min_change_w_value | float(20)) }}
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input storage1_input_limit_number
+            data:
+              value: "{{ storage1_target_input_w | float(0) }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ ((states(storage1_output_number_entity) | float(0) - (storage1_target_output_w | float(0))) | abs)
+                 >= (min_change_w_value | float(20)) }}
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input storage1_output_limit_number
+            data:
+              value: "{{ storage1_target_output_w | float(0) }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ ((storage1_target_input_w | float(0)) > 0 or (storage1_target_output_w | float(0)) > 0)
+                 and states(storage1_ac_select_entity) != (storage1_target_mode | trim) }}
+        sequence:
+          - service: select.select_option
+            target:
+              entity_id: !input storage1_ac_mode_select
+            data:
+              option: "{{ storage1_target_mode | trim }}"
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ ((states(storage2_input_number_entity) | float(0) - (storage2_target_input_w | float(0))) | abs)
+                 >= (min_change_w_value | float(20)) }}
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input storage2_input_limit_number
+            data:
+              value: "{{ storage2_target_input_w | float(0) }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ ((states(storage2_output_number_entity) | float(0) - (storage2_target_output_w | float(0))) | abs)
+                 >= (min_change_w_value | float(20)) }}
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input storage2_output_limit_number
+            data:
+              value: "{{ storage2_target_output_w | float(0) }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ ((storage2_target_input_w | float(0)) > 0 or (storage2_target_output_w | float(0)) > 0)
+                 and states(storage2_ac_select_entity) != (storage2_target_mode | trim) }}
+        sequence:
+          - service: select.select_option
+            target:
+              entity_id: !input storage2_ac_mode_select
+            data:
+              option: "{{ storage2_target_mode | trim }}"
