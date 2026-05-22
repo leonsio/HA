@@ -1,5 +1,5 @@
 blueprint:
-  name: Zendure/Solarman Nulleinspeisung mit 2 Speichern - Geraeteauswahl v12
+  name: Zendure/Solarman Nulleinspeisung mit 2 Speichern - Geraeteauswahl v13
   description: >-
     Regelt zwei Zendure-Speicher ueber die offizielle Zendure Home Assistant
     Integration und einen ueber Solarman angebundenen Wechselrichter auf
@@ -8,7 +8,7 @@ blueprint:
     Zendure-Entitaeten werden zur Laufzeit aus den Geraete-Entitaeten
     abgeleitet: electric_level/soc_level, output_pack_power,
     pack_input_power, total_kwh, available_kwh, ac_mode, input_limit,
-    output_limit und
+    output_limit, inverse_max_power und
     optional grid_off_mode bzw. ein Off-Grid-Switch. Der Off-Grid-Port wird
     nur an dem separat ausgewaehlten Zendure-Speichergeraet geschaltet, an
     dessen Off-Grid-Port der Wechselrichter angeschlossen ist. Der Netzsensor
@@ -21,19 +21,22 @@ blueprint:
     Ladeueberschuss des abgebenden Speichers verwendet. Die normale
     Ladeleistung aus bzw. ueber das Hausnetz bleibt konfigurierbar. Die
     Entladung zur Hausversorgung und die Abgabe beim Speicher-zu-Speicher-
-    Transfer werden je Speicher ueber eine eigene maximale Entladegrenze
-    begrenzt, standardmaessig 800 W pro Speicher. Bei der Einspeisung/
-    Entladung ins Hausnetz wird die kapazitaets- und ladeleistungsbasierte
-    Verteilung nur bis zur konfigurierten Einzel-Speicher-Grenze angewendet;
-    wird mehr Leistung gebraucht, duerfen beide Speicher parallel bis zu
-    ihrer jeweiligen Entladegrenze liefern. Sind beide Speicher voll, werden
+    Transfer werden je Speicher automatisch ueber die Zendure-Entitaet
+    *_inverse_max_power begrenzt. Bei der Einspeisung/Entladung ins Hausnetz
+    wird die kapazitaets- und ladeleistungsbasierte Verteilung nur bis zur
+    automatisch ermittelten Einzel-Speicher-Grenze angewendet; wird mehr
+    Leistung gebraucht, duerfen beide Speicher parallel bis zu ihrem jeweiligen
+    *_inverse_max_power-Wert liefern. Sind beide Speicher voll, werden
     sie bis zu dieser Grenze gleichmaessig genutzt. Sind beide Speicher nicht
     voll, wird der Speicher mit groesserer verfuegbarer Energie aus
     *_available_kwh im Verhaeltnis zur Gesamtkapazitaet und mit hoeherer
     aktueller Batterieladeleistung staerker herangezogen. Erreicht ein
     Speicher den unteren SoC-Wert oder meldet keine verfuegbare Energie, wird
     er fuer die Einspeisung gesperrt; der andere Speicher uebernimmt die
-    Einspeisung dann allein, soweit sein Leistungsgrenzwert ausreicht.
+    Einspeisung dann allein, soweit sein aus *_inverse_max_power gelesener
+    Leistungsgrenzwert ausreicht. Zendure-AC-Modi werden fest mit input zum
+    Laden und output zum Entladen gesetzt. Der Off-Grid-Modus wird fest mit
+    off zum Abschalten und normal zum Einschalten gesetzt.
   domain: automation
   input:
     grid_meter_device:
@@ -156,86 +159,20 @@ blueprint:
           unit_of_measurement: "%"
           mode: slider
 
-    storage_input_option:
-      name: Zendure AC-Modus-Option fuer Laden
-      description: >-
-        Exakter Optionsname der Zendure-Select-Entitaet ac_mode fuer Laden.
-        Bei Zendure-HA ist der Standard normalerweise input.
-      default: input
-      selector:
-        text: {}
-    storage_output_option:
-      name: Zendure AC-Modus-Option fuer Entladen
-      description: >-
-        Exakter Optionsname der Zendure-Select-Entitaet ac_mode fuer Entladen.
-        Bei Zendure-HA ist der Standard normalerweise output.
-      default: output
-      selector:
-        text: {}
-    offgrid_on_option:
-      name: Zendure Off-Grid-Modus Option fuer EIN
-      description: >-
-        Wird verwendet, wenn die erkannte Off-Grid-Entitaet ein Select ist,
-        z. B. grid_off_mode. Bei Zendure-HA sind typische Optionen normal,
-        eco und off. Fuer EIN ist normal der konservative Standard.
-      default: normal
-      selector:
-        text: {}
-    offgrid_off_option:
-      name: Zendure Off-Grid-Modus Option fuer AUS
-      description: >-
-        Wird verwendet, wenn die erkannte Off-Grid-Entitaet ein Select ist.
-        Standard ist off.
-      default: off
-      selector:
-        text: {}
-
     max_house_grid_power_w:
       name: Maximale Ladeleistung ueber das Hausnetz
       description: >-
         Maximale Ladeleistung, die fuer normale Ueberschussladung und
         Netz-Notladung ueber das Hausnetz genutzt wird. Default 1000 W.
-        Die Entladung zur Hausversorgung wird nicht mehr durch diesen Wert,
-        sondern durch die maximale Entladeleistung je Speicher begrenzt.
-        Speicher-zu-Speicher-Transfer wird ebenfalls durch die Entladegrenze
-        des abgebenden Speichers und die Ladegrenze des annehmenden Speichers
-        begrenzt.
+        Die Entladung zur Hausversorgung wird nicht durch diesen Wert,
+        sondern automatisch durch *_inverse_max_power des jeweiligen Speichers
+        begrenzt. Speicher-zu-Speicher-Transfer wird ebenfalls durch
+        *_inverse_max_power des abgebenden Speichers und die Ladegrenze des
+        annehmenden Speichers begrenzt.
       default: 1000
       selector:
         number:
           min: 100
-          max: 5000
-          step: 10
-          unit_of_measurement: W
-          mode: box
-    storage1_max_discharge_limit_w:
-      name: Speicher 1 - maximale Entladeleistung
-      description: >-
-        Maximale AC-Ausgangsleistung von Speicher 1 in Watt. Default 800 W.
-        Dieser Wert begrenzt die normale Entladung zur Hausversorgung und die
-        Abgabe beim Speicher-zu-Speicher-Transfer, wenn Speicher 1 der
-        abgebende Speicher ist. Falls die Zendure-Number selbst ein kleineres
-        max-Attribut meldet, wird der kleinere Wert verwendet.
-      default: 800
-      selector:
-        number:
-          min: 0
-          max: 5000
-          step: 10
-          unit_of_measurement: W
-          mode: box
-    storage2_max_discharge_limit_w:
-      name: Speicher 2 - maximale Entladeleistung
-      description: >-
-        Maximale AC-Ausgangsleistung von Speicher 2 in Watt. Default 800 W.
-        Dieser Wert begrenzt die normale Entladung zur Hausversorgung und die
-        Abgabe beim Speicher-zu-Speicher-Transfer, wenn Speicher 2 der
-        abgebende Speicher ist. Falls die Zendure-Number selbst ein kleineres
-        max-Attribut meldet, wird der kleinere Wert verwendet.
-      default: 800
-      selector:
-        number:
-          min: 0
           max: 5000
           step: 10
           unit_of_measurement: W
@@ -246,8 +183,9 @@ blueprint:
         Speicher-zu-Speicher-Transfer bei nicht vollem abgebendem Speicher
         wird erst aktiviert, wenn die berechnete Einspeisung diesen Wert
         ueberschreitet. Alles oberhalb dieses Werts wird, begrenzt durch die
-        Speicherlimits und die maximale Hausnetz-Leistung, ueber das Hausnetz
-        an den Speicher mit niedrigerem SoC weitergegeben. Default 1000 W.
+        Speicherlimits und den tatsaechlich verfuegbaren Ueberschuss, ueber
+        das Hausnetz an den Speicher mit niedrigerem SoC weitergegeben.
+        Default 1000 W.
       default: 1000
       selector:
         number:
@@ -391,7 +329,7 @@ variables:
   # Detail: Die Marke kann in Trace-Ausgaben, Logbuch oder beim Vergleichen mehrerer Blueprint-Dateien helfen.
   # Detail: Es werden hier keine Geraete gelesen, keine Leistungen berechnet und keine Entitaeten veraendert.
   # Setzt nur die interne Versionskennung fuer Diagnose und Nachvollziehbarkeit; es wird keine Steuerentscheidung berechnet.
-  blueprint_version: "2026-05-21-zendure-device-v12-extended-comments"
+  blueprint_version: "2026-05-21-zendure-device-v13-inverse-max-power-fixed-modes"
 
 mode: single
 max_exceeded: silent
@@ -400,10 +338,10 @@ action:
   - variables:
       # Block: Eingabewerte aus der Blueprint-Maske uebernehmen.
       # Detail: Home-Assistant-Blueprint-Eingaben werden hier einmalig in normal nutzbare Template-Variablen kopiert.
-      # Detail: Dazu gehoeren die ausgewaehlten Geraete, Vorzeichenoptionen, SoC-Schwellen, Lade-/Entladegrenzen, Textoptionen fuer Zendure-Modi und Solarman-Parameter.
+      # Detail: Dazu gehoeren die ausgewaehlten Geraete, Vorzeichenoptionen, SoC-Schwellen, Ladegrenzen und Solarman-Parameter.
       # Detail: In diesem Block wird noch nichts gemessen und nichts geregelt; er dient nur als Konfigurationsbasis fuer alle nachfolgenden Berechnungen.
-      # Detail: Jede Variable mit Suffix _value stammt direkt aus der Eingabemaske und ist damit ein vom Benutzer konfigurierter Grenz- oder Optionswert.
-      # Setzt die ausgewaehlten Geraete, Grenzwerte, SoC-Schwellen und Modus-Optionen als lokale Variablen fuer alle folgenden Berechnungen.
+      # Detail: Variablen mit Suffix _value stammen aus der Eingabemaske, waehrend die Zendure-Modusnamen hier bewusst fest auf input/output und normal/off gesetzt werden.
+      # Setzt die ausgewaehlten Geraete, Grenzwerte, SoC-Schwellen sowie feste Zendure-Modusnamen als lokale Variablen fuer alle folgenden Berechnungen.
       grid_meter_device_id: !input grid_meter_device
       storage1_device_id: !input storage1_device
       storage2_device_id: !input storage2_device
@@ -416,13 +354,13 @@ action:
       inverter_ramp_w_value: !input inverter_ramp_w
       inverter_unthrottle_soc_value: !input inverter_unthrottle_soc
 
-      storage_input_option_value: !input storage_input_option
-      storage_output_option_value: !input storage_output_option
-      offgrid_on_option_value: !input offgrid_on_option
-      offgrid_off_option_value: !input offgrid_off_option
+      # Feste Zendure-HA-Optionsnamen: AC input = Laden, AC output = Entladen.
+      storage_input_option_value: "input"
+      storage_output_option_value: "output"
+      # Feste Zendure-HA-Off-Grid-Optionsnamen: normal = Port aktiv, off = Port deaktiviert.
+      offgrid_on_option_value: "normal"
+      offgrid_off_option_value: "off"
       max_house_grid_power_w_value: !input max_house_grid_power_w
-      storage1_max_discharge_limit_w_value: !input storage1_max_discharge_limit_w
-      storage2_max_discharge_limit_w_value: !input storage2_max_discharge_limit_w
       surplus_exchange_threshold_w_value: !input surplus_exchange_threshold_w
       zero_tolerance_w_value: !input zero_tolerance_w
       min_change_w_value: !input min_change_w
@@ -439,10 +377,10 @@ action:
       # Block: Entitaeten automatisch aus den ausgewaehlten Geraeten ableiten.
       # Detail: Fuer jedes ausgewaehlte Home-Assistant-Geraet werden alle zugeordneten Entitaeten mit device_entities() durchsucht.
       # Detail: Der Blueprint sucht keine frei waehlbaren Einzelentitaeten mehr, sondern erkennt die benoetigten Zendure-HA-, Shelly- und Solarman-Entitaeten anhand von Domain und typischen Suffixen.
-      # Detail: Fuer die Speicher werden SoC, Batterie-Ladeleistung, optionale Entladeleistung, *_total_kwh, *_available_kwh, ac_mode, input_limit und output_limit gesucht.
+      # Detail: Fuer die Speicher werden SoC, Batterie-Ladeleistung, optionale Entladeleistung, *_total_kwh, *_available_kwh, ac_mode, input_limit, output_limit und *_inverse_max_power gesucht.
       # Detail: Fuer den Off-Grid-Port wird nur im separat ausgewaehlten Speichergeraet gesucht, damit nicht versehentlich der Off-Grid-Port des anderen Speichers geschaltet wird.
       # Detail: Fuer den Wechselrichter wird innerhalb des Solarman-Geraets die Number-Entitaet *_active_power_regulation gesucht, weil diese spaeter den Prozentwert erhaelt.
-      # Berechnet bzw. sucht die benoetigten Entity-IDs anhand typischer Zendure-HA-, Shelly- und Solarman-Suffixe.
+      # Berechnet bzw. sucht die benoetigten Entity-IDs anhand typischer Zendure-HA-, Shelly- und Solarman-Suffixe; die Entladegrenze kommt aus *_inverse_max_power.
       grid_power_sensor_entity: >-
         {% set ns = namespace(e='') %}
         {% for e in device_entities(grid_meter_device_id) if e.startswith('sensor.') %}
@@ -530,6 +468,15 @@ action:
         {% for e in device_entities(storage1_device_id) if e.startswith('number.') %}
           {% set oid = e.split('.', 1)[1] %}
           {% if ns.e == '' and (oid.endswith('_output_limit') or oid.endswith('_ac_output_limit') or oid.endswith('_outputlimit')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage1_inverse_max_power_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (e.startswith('number.') or e.startswith('sensor.')) and (oid.endswith('_inverse_max_power') or oid.endswith('_inversemaxpower')) %}
             {% set ns.e = e %}
           {% endif %}
         {% endfor %}
@@ -624,6 +571,15 @@ action:
           {% endif %}
         {% endfor %}
         {{ ns.e }}
+      storage2_inverse_max_power_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (e.startswith('number.') or e.startswith('sensor.')) and (oid.endswith('_inverse_max_power') or oid.endswith('_inversemaxpower')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
       storage2_offgrid_entity: >-
         {% set ns = namespace(e='') %}
         {% for e in device_entities(storage2_device_id) if e.startswith('select.') %}
@@ -687,6 +643,7 @@ action:
         {% if storage1_ac_select_entity == '' %}{% set missing = missing + ['Speicher 1 ac_mode'] %}{% endif %}
         {% if storage1_input_number_entity == '' %}{% set missing = missing + ['Speicher 1 input_limit'] %}{% endif %}
         {% if storage1_output_number_entity == '' %}{% set missing = missing + ['Speicher 1 output_limit'] %}{% endif %}
+        {% if storage1_inverse_max_power_entity == '' %}{% set missing = missing + ['Speicher 1 inverse_max_power'] %}{% endif %}
         {% if storage2_soc_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 electric_level/soc_level'] %}{% endif %}
         {% if storage2_battery_charge_power_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 output_pack_power'] %}{% endif %}
         {% if storage2_total_kwh_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 total_kwh'] %}{% endif %}
@@ -694,6 +651,7 @@ action:
         {% if storage2_ac_select_entity == '' %}{% set missing = missing + ['Speicher 2 ac_mode'] %}{% endif %}
         {% if storage2_input_number_entity == '' %}{% set missing = missing + ['Speicher 2 input_limit'] %}{% endif %}
         {% if storage2_output_number_entity == '' %}{% set missing = missing + ['Speicher 2 output_limit'] %}{% endif %}
+        {% if storage2_inverse_max_power_entity == '' %}{% set missing = missing + ['Speicher 2 inverse_max_power'] %}{% endif %}
         {% if offgrid_inverter_storage_device_id not in [storage1_device_id, storage2_device_id] %}{% set missing = missing + ['Off-Grid-Geraet muss Speicher 1 oder Speicher 2 sein'] %}{% endif %}
         {% if selected_offgrid_entity == '' %}{% set missing = missing + ['Ausgewaehltes Off-Grid-Geraet grid_off_mode/off_grid switch'] %}{% endif %}
         {% if inverter_active_power_regulation_entity == '' %}{% set missing = missing + ['Solarman active_power_regulation'] %}{% endif %}
@@ -738,9 +696,9 @@ action:
       # Detail: Ab hier beginnt der eigentliche Sekunden-Regelzyklus mit echten Zustandswerten aus Home Assistant.
       # Detail: Der Shelly-Wert wird in eine einheitliche Vorzeichenlogik gebracht: positiv bedeutet Netzbezug, negativ bedeutet Einspeisung.
       # Detail: SoC, aktuelle Batterie-Lade-/Entladeleistungen, *_total_kwh und *_available_kwh werden in Zahlen umgewandelt und fuer spaetere Gewichtungen vorbereitet.
-      # Detail: Die technischen Lade- und Entladegrenzen werden aus den Zendure-Number-Attributen und den Benutzervorgaben gebildet; verwendet wird immer die kleinere sichere Grenze.
+      # Detail: Die technischen Ladegrenzen kommen aus den Zendure-Input-Number-Attributen, die Entlade-/Transfergrenzen kommen aus den Zendure-Entitaeten *_inverse_max_power.
       # Detail: Die aktuelle Solarman-Prozentbegrenzung wird zusaetzlich in Watt umgerechnet, damit die Drosselung in einer einheitlichen Watt-Logik berechnet werden kann.
-      # Berechnet Netzleistung, SoC, Lade-/Entladeleistungen, Kapazitaeten in Wh, Speicherlimits und aktuelle Wechselrichterleistung.
+      # Berechnet Netzleistung, SoC, Lade-/Entladeleistungen, Kapazitaeten in Wh, Speicherlimits aus *_inverse_max_power und aktuelle Wechselrichterleistung.
       # Messwert des Netzanschlusses in Watt.
       # Berechnung: Shelly-Wert * -1, wenn die Option "Vorzeichen invertieren" aktiv ist.
       # Erwartete Bedeutung danach: positive Werte = Netzbezug, negative Werte = Einspeisung.
@@ -797,24 +755,27 @@ action:
         {% set m = state_attr(storage2_input_number_entity, 'max') | float(0) %}
         {{ (m if m > 0 else max_house_grid_power_w_value | float(1000)) | round(0) }}
 
-      # Maximal erlaubte Entladeleistung wird pro Speicher aus der Blueprint-Maske gelesen.
-      # Wenn die Zendure-Output-Number ein kleineres max-Attribut meldet, wird sicherheitshalber der kleinere Wert verwendet.
+      # Maximal erlaubte Entlade- und Transferleistung wird nicht mehr abgefragt.
+      # Stattdessen wird der aktuelle Wert der Zendure-Entitaet *_inverse_max_power gelesen.
+      # Falls die steuernde output_limit-Number ein kleineres max-Attribut meldet, wird sicherheitshalber der kleinere Wert verwendet.
       # Diese Werte begrenzen sowohl die Entladung zur Hausversorgung als auch die Abgabe beim Speicher-zu-Speicher-Transfer.
+      storage1_inverse_max_power_w: "{{ ([states(storage1_inverse_max_power_entity) | float(0), 0] | max) | round(0) }}"
+      storage2_inverse_max_power_w: "{{ ([states(storage2_inverse_max_power_entity) | float(0), 0] | max) | round(0) }}"
       storage1_max_discharge_w: >-
-        {% set configured = storage1_max_discharge_limit_w_value | float(800) %}
+        {% set inverse = storage1_inverse_max_power_w | float(0) %}
         {% set ha_max = state_attr(storage1_output_number_entity, 'max') | float(0) %}
-        {% if ha_max > 0 %}
-          {{ ([configured, ha_max] | min) | round(0) }}
+        {% if ha_max > 0 and inverse > 0 %}
+          {{ ([inverse, ha_max] | min) | round(0) }}
         {% else %}
-          {{ configured | round(0) }}
+          {{ inverse | round(0) }}
         {% endif %}
       storage2_max_discharge_w: >-
-        {% set configured = storage2_max_discharge_limit_w_value | float(800) %}
+        {% set inverse = storage2_inverse_max_power_w | float(0) %}
         {% set ha_max = state_attr(storage2_output_number_entity, 'max') | float(0) %}
-        {% if ha_max > 0 %}
-          {{ ([configured, ha_max] | min) | round(0) }}
+        {% if ha_max > 0 and inverse > 0 %}
+          {{ ([inverse, ha_max] | min) | round(0) }}
         {% else %}
-          {{ configured | round(0) }}
+          {{ inverse | round(0) }}
         {% endif %}
 
       # Aktuelle Solarman-Begrenzung in Prozent und daraus berechnete aktuelle Wechselrichterleistung in Watt.
@@ -841,6 +802,8 @@ action:
            or states(storage2_total_kwh_sensor_entity) in ['unknown', 'unavailable', 'none']
            or states(storage1_available_kwh_sensor_entity) in ['unknown', 'unavailable', 'none']
            or states(storage2_available_kwh_sensor_entity) in ['unknown', 'unavailable', 'none']
+           or states(storage1_inverse_max_power_entity) in ['unknown', 'unavailable', 'none']
+           or states(storage2_inverse_max_power_entity) in ['unknown', 'unavailable', 'none']
            or (storage1_total_kwh | float(0)) <= 0
            or (storage2_total_kwh | float(0)) <= 0 }}
 
@@ -1017,8 +980,8 @@ action:
           # Detail: Dieser verschachtelte choose-Block vermeidet falsche Service-Aufrufe, indem select.select_option nur fuer select.* und switch.turn_off nur fuer switch.* verwendet wird.
           # Detail: Ausgefuehrt wird jeweils nur ein Zweig, und auch nur wenn der aktuelle Zustand noch nicht dem Zielzustand entspricht.
           - choose:
-              # conditions: Der ausgewaehlte Off-Grid-Port ist eine select-Entitaet und steht noch nicht auf der konfigurierten Aus-Option.
-              # Detail: Der Zweig nutzt den benutzerdefinierten Textwert offgrid_off_option, standardmaessig 'off'.
+              # conditions: Der ausgewaehlte Off-Grid-Port ist eine select-Entitaet und steht noch nicht auf der festen Aus-Option 'off'.
+              # Detail: Der Zweig nutzt fest den Zendure-HA-Optionsnamen 'off'; dieser Wert wird nicht mehr in der Blueprint-Maske abgefragt.
               # Detail: Er verhindert unnoetige select.select_option-Aufrufe, wenn der Port bereits auf der Aus-Option steht.
               # Detail: Damit bleibt der Trace uebersichtlich und Zendure wird nicht jede Sekunde mit identischen Befehlen belastet.
               - conditions:
@@ -1051,11 +1014,11 @@ action:
         sequence:
           # choose: Waehlt fuer das ausgewaehlte Off-Grid-Geraet die passende Einschaltaktion anhand des Entitaetstyps select oder switch.
           # Detail: Auch beim Einschalten wird zwischen select.* und switch.* unterschieden.
-          # Detail: Der select-Zweig setzt die konfigurierte Ein-Option, der switch-Zweig nutzt switch.turn_on.
+          # Detail: Der select-Zweig setzt fest die Ein-Option 'normal', der switch-Zweig nutzt switch.turn_on.
           # Detail: Beide Zweige pruefen vorher den aktuellen Zustand, damit kein identischer Befehl jede Sekunde wiederholt wird.
           - choose:
-              # conditions: Der ausgewaehlte Off-Grid-Port ist eine select-Entitaet und steht noch nicht auf der konfigurierten Ein-Option.
-              # Detail: Der Zweig nutzt den benutzerdefinierten Textwert offgrid_on_option, standardmaessig 'normal'.
+              # conditions: Der ausgewaehlte Off-Grid-Port ist eine select-Entitaet und steht noch nicht auf der festen Ein-Option 'normal'.
+              # Detail: Der Zweig nutzt fest den Zendure-HA-Optionsnamen 'normal'; dieser Wert wird nicht mehr in der Blueprint-Maske abgefragt.
               # Detail: Er wird nur ausgefuehrt, wenn der select aktuell nicht schon auf dieser Option steht.
               # Detail: So kann die gleiche Logik fuer Zendure-Geraete mit unterschiedlichen Optionsnamen genutzt werden.
               - conditions:
@@ -1280,7 +1243,7 @@ action:
         {% endif %}
 
       # Normale Entladung gegen Netzbezug ohne Speicher-zu-Speicher-Transfer.
-      # Berechnung: Netzbezug, begrenzt durch die Summe der konfigurierten Entladegrenzen der entladefaehigen Speicher.
+      # Berechnung: Netzbezug, begrenzt durch die Summe der aus *_inverse_max_power ermittelten Entladegrenzen der entladefaehigen Speicher.
       # Dadurch kann bei mehr als einer Einzel-Speicher-Grenze Bedarf beide Speicher parallel bis zu ihrer jeweiligen Grenze nutzen.
       # Speicher am unteren SoC-Limit oder ohne *_available_kwh werden durch storage*_can_discharge ausgeschlossen; ein einzelner verbleibender Speicher bekommt dadurch 100 Prozent des Bedarfs.
       no_balance_base_output_total_w: >-
@@ -1342,8 +1305,8 @@ action:
       no_balance_output_weight_total: "{{ (no_balance_output_weight_1 | float(0)) + (no_balance_output_weight_2 | float(0)) }}"
 
       # Grenze fuer die bisherige gewichtete Entladeverteilung.
-      # Berechnung: groesste wirksame Einzel-Entladegrenze der entladefaehigen Speicher.
-      # Default bei zwei Speichern mit 800 W ist 800 W. Bis zu dieser Gesamtleistung gilt die kapazitaets- und ladeleistungsbasierte Einteilung.
+      # Berechnung: groesste aus *_inverse_max_power ermittelte Einzel-Entladegrenze der entladefaehigen Speicher.
+      # Bei zwei Speichern richtet sich dieser Wert nach dem groessten aktuell aus *_inverse_max_power gelesenen Speicherwert. Bis zu dieser Gesamtleistung gilt die kapazitaets- und ladeleistungsbasierte Einteilung.
       no_balance_weighted_output_tier_limit_w: >-
         {% set s1 = storage1_max_discharge_w | float(0) if (storage1_can_discharge | bool(false)) else 0 %}
         {% set s2 = storage2_max_discharge_w | float(0) if (storage2_can_discharge | bool(false)) else 0 %}
@@ -1362,11 +1325,11 @@ action:
   - variables:
       # Block: technische Limits des Speicher-zu-Speicher-Transfers und Basis-Zielwerte berechnen.
       # Detail: Dieser Block berechnet nicht die Richtung des Transfers, sondern nur dessen technisch erlaubte Hoehe und vorbereitende Vergleichswerte.
-      # Detail: Die maximale Abgabeleistung kommt aus der konfigurierten Entlade-/Transfergrenze des abgebenden Speichers und ggf. aus dem Zendure-output_limit-Maximum.
+      # Detail: Die maximale Abgabeleistung kommt aus der aus *_inverse_max_power ermittelten Entlade-/Transfergrenze des abgebenden Speichers und ggf. aus dem Zendure-output_limit-Maximum.
       # Detail: Die maximale Aufnahmeleistung kommt aus der input_limit-Grenze des annehmenden Speichers.
       # Detail: Bei vollem abgebendem Speicher darf der reale Ueberschuss oberhalb des Totbands verwendet werden; bei nicht vollem Speicher nur der Ladeleistungs-Vorsprung oberhalb des Einspeise-Grenzwerts.
       # Detail: balance_transfer_w ist die finale Transferleistung und wird durch Quelle, Ziel, Ueberschuss und Mindesttransfer begrenzt.
-      # Ermittelt Quelle/Ziel, begrenzt den Transfer durch Hausnetzlimit, Speicherlimits und verfuegbaren Ueberschuss und berechnet Vorverteilungen.
+      # Ermittelt Quelle/Ziel, begrenzt den Transfer durch *_inverse_max_power des abgebenden Speichers, Ladegrenze des annehmenden Speichers und verfuegbaren Ueberschuss und berechnet Vorverteilungen.
       # Speicher-zu-Speicher-Quelle: maximal moegliche Entladeleistung des abgebenden Speichers.
       balance_source_max_discharge_w: >-
         {% if (balance_direction | trim) == '1_to_2' %}
@@ -1415,7 +1378,7 @@ action:
 
       # Endgueltiger Speicher-zu-Speicher-Transfer.
       # Berechnung: min(Wunsch, Entladegrenze des abgebenden Speichers, Ladegrenze des annehmenden Speichers, verfuegbarer Ueberschuss).
-      # Es gibt kein separates Transferlimit mehr; die maximale Entladeleistung des abgebenden Speichers ist die Transfergrenze.
+      # Es gibt kein separates Transferlimit mehr; die aus *_inverse_max_power gelesene maximale Entladeleistung des abgebenden Speichers ist die Transfergrenze.
       balance_transfer_w: >-
         {% if (balance_direction | trim) != 'none' and (balance_raw_desired_w | float(0)) >= (balance_transfer_min_w_value | float(50)) %}
           {{ ([balance_raw_desired_w | float(0), balance_source_max_discharge_w | float(0), balance_target_max_charge_w | float(0), balance_source_surplus_cap_w | float(0)] | min) | round(0) }}
@@ -1462,7 +1425,7 @@ action:
         {% endif %}
 
       # Nach der gewichteten Verteilung noch freie Entladekapazitaet von Speicher 1.
-      # Berechnung: max(0, maximale Entladeleistung Speicher 1 - gewichteter Anteil Speicher 1).
+      # Berechnung: max(0, aus *_inverse_max_power gelesene maximale Entladeleistung Speicher 1 - gewichteter Anteil Speicher 1).
       no_balance_storage1_remaining_output_capacity_w: >-
         {% if storage1_can_discharge | bool(false) %}
           {{ ([0, (storage1_max_discharge_w | float(0)) - (no_balance_storage1_weighted_output_w | float(0))] | max) | round(0) }}
@@ -1471,7 +1434,7 @@ action:
         {% endif %}
 
       # Nach der gewichteten Verteilung noch freie Entladekapazitaet von Speicher 2.
-      # Berechnung: max(0, maximale Entladeleistung Speicher 2 - gewichteter Anteil Speicher 2).
+      # Berechnung: max(0, aus *_inverse_max_power gelesene maximale Entladeleistung Speicher 2 - gewichteter Anteil Speicher 2).
       no_balance_storage2_remaining_output_capacity_w: >-
         {% if storage2_can_discharge | bool(false) %}
           {{ ([0, (storage2_max_discharge_w | float(0)) - (no_balance_storage2_weighted_output_w | float(0))] | max) | round(0) }}
@@ -1505,13 +1468,13 @@ action:
 
       # Finale Entladung/Einspeisung ins Hausnetz fuer Speicher 1.
       # Berechnung: gewichteter Anteil bis zur Einzel-Speicher-Grenze + Zusatzanteil oberhalb dieser Grenze, begrenzt durch Speicher-1-Entladegrenze.
-      # Ist Speicher 2 an der unteren Entladegrenze und Speicher 1 darf entladen, uebernimmt Speicher 1 bis zu seiner eigenen Grenze.
+      # Ist Speicher 2 an der unteren Entladegrenze und Speicher 1 darf entladen, uebernimmt Speicher 1 bis zu seinem aus *_inverse_max_power gelesenen Limit.
       no_balance_storage1_output_w: >-
         {{ ([storage1_max_discharge_w | float(0), (no_balance_storage1_weighted_output_w | float(0)) + (no_balance_storage1_parallel_extra_output_w | float(0))] | min) | round(0) }}
 
       # Finale Entladung/Einspeisung ins Hausnetz fuer Speicher 2.
       # Gleiche Berechnung wie bei Speicher 1.
-      # Ist Speicher 1 an der unteren Entladegrenze und Speicher 2 darf entladen, uebernimmt Speicher 2 bis zu seiner eigenen Grenze.
+      # Ist Speicher 1 an der unteren Entladegrenze und Speicher 2 darf entladen, uebernimmt Speicher 2 bis zu seinem aus *_inverse_max_power gelesenen Limit.
       no_balance_storage2_output_w: >-
         {{ ([storage2_max_discharge_w | float(0), (no_balance_storage2_weighted_output_w | float(0)) + (no_balance_storage2_parallel_extra_output_w | float(0))] | min) | round(0) }}
 
@@ -1594,7 +1557,7 @@ action:
       # Detail: Der Wechselrichter wird schrittweise gedrosselt, wenn beide Speicher voll sind oder nicht mehr laden koennen; er wird wieder entdrosselt, wenn ein Speicher unter die Entdrossel-Schwelle faellt oder Netzbezug erkannt wird.
       # Detail: Am Ende wird die Watt-Zielgroesse in den Prozentwert fuer Solarman *_active_power_regulation umgerechnet.
       # Berechnet AC-Modi, geplante Lade-/Entladesummen, erwartete Netzleistung, verbleibenden Drossel-Ueberschuss und Prozentwert fuer *_active_power_regulation.
-      # Zielmodus Speicher 1: input, wenn geladen werden soll, sonst output.
+      # Zielmodus Speicher 1: fester Zendure-HA-Modus input, wenn geladen werden soll, sonst fester Modus output.
       storage1_target_mode: >-
         {% if (storage1_target_input_w | float(0)) > 0 %}
           {{ storage_input_option_value }}
@@ -1602,7 +1565,7 @@ action:
           {{ storage_output_option_value }}
         {% endif %}
 
-      # Zielmodus Speicher 2: input, wenn geladen werden soll, sonst output.
+      # Zielmodus Speicher 2: fester Zendure-HA-Modus input, wenn geladen werden soll, sonst fester Modus output.
       storage2_target_mode: >-
         {% if (storage2_target_input_w | float(0)) > 0 %}
           {{ storage_input_option_value }}
@@ -1722,13 +1685,13 @@ action:
               value: "{{ storage1_target_output_w | float(0) }}"
   # choose: Schaltet den AC-Modus von Speicher 1 auf Laden oder Entladen, sobald eine Zielleistung aktiv ist.
   # Detail: Dieser Block setzt den Zendure-ac_mode von Speicher 1 passend zu den Zielwerten.
-  # Detail: Bei positiver Lade-Zielleistung wird die konfigurierte Ladeoption verwendet; andernfalls die konfigurierte Entladeoption.
+  # Detail: Bei positiver Lade-Zielleistung wird fest 'input' verwendet; andernfalls fest 'output'.
   # Detail: Der Modus wird nur umgeschaltet, wenn Speicher 1 in diesem Zyklus tatsaechlich laden oder entladen soll.
   - choose:
       # conditions: Speicher 1 soll laden oder entladen und die aktuelle ac_mode-Option entspricht noch nicht dem Zielmodus.
       # Detail: Die Bedingung verhindert Moduswechsel bei 0-Watt-Zielwerten und bei bereits korrekt gesetztem Modus.
       # Detail: Dadurch bleibt ein ruhender Speicher unveraendert und Zendure erhaelt nur notwendige select.select_option-Aufrufe.
-      # Detail: Der Zielmodus stammt aus storage1_target_mode und nutzt die in der Blueprint-Maske angegebenen Optionsnamen.
+      # Detail: Der Zielmodus stammt aus storage1_target_mode und nutzt fest die Zendure-HA-Optionsnamen input/output.
       - conditions:
           - condition: template
             value_template: >-
