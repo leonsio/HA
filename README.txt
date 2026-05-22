@@ -1,74 +1,667 @@
-Zendure/Solarman Nulleinspeisung Device Blueprint v14
-======================================================
+# Zendure/Solarman Nulleinspeisung mit zwei Speichern
 
-Installation
-------------
-Kopiere den Ordner "blueprints" in dein Home-Assistant-config-Verzeichnis oder importiere die YAML-Datei als Blueprint.
+README-Stand: v15 Dokumentation  
+Blueprint-Logik: v14, funktional unverändert
 
-Aenderungen in v14
-------------------
-- Die Speicher-zu-Speicher-Transferlogik wurde ueberarbeitet.
-- Regel 1 fuer nicht volle Speicher:
-  - Der abgebende Speicher muss zuerst die aktuell benoetigte Haus-Einspeisung voll abdecken koennen.
-  - Berechnung der reservierten Haus-Einspeisung: max(Netto-Speichereinspeisung ins Haus, berechneter Netzbezug ohne Speicherbefehle).
-  - Netto-Speichereinspeisung ins Haus = aktuelle Output-Limits beider Speicher minus aktuelle Input-Limits beider Speicher. Dadurch bleibt bei bereits laufendem Transfer nur die echte Hausversorgung uebrig.
-  - Quell-Ueberschuss: aktuelle Batterieladeleistung des abgebenden Speichers minus reservierte Haus-Einspeisung.
-  - Nur der Anteil oberhalb "surplus_exchange_threshold_w" wird an den anderen Speicher weitergegeben.
-  - Beispiel: 1000 W Batterieladung, 100 W aktueller Output von Speicher 1, 100 W aktueller Output von Speicher 2 und 200 W Schwelle ergeben 1000 W - 200 W - 200 W = 600 W Transfer.
-- Der abgebende Speicher uebernimmt im Balance-Modus die Hausversorgung plus den Speicher-zu-Speicher-Transfer.
-  - Beispiel: 200 W Hausversorgung plus 600 W Transfer ergeben 800 W Output am abgebenden Speicher.
-  - Der annehmende Speicher bekommt nur die Transferleistung als input_limit.
-- Regel 2 fuer volle Speicher:
-  - Wenn ein Speicher voll ist, wird sein verfuegbarer Ueberschuss an den zweiten Speicher uebergeben.
-  - Dabei werden SoC-Richtung, Ladefaehigkeit des annehmenden Speichers, Entladefaehigkeit des abgebenden Speichers, *_inverse_max_power, input_limit-Maximum und Mindesttransfer weiterhin beruecksichtigt.
-  - Fuer volle Speicher wird die konfigurierbare Transfer-Schwelle nicht abgezogen; es gilt nur das Totband der Nulleinspeisung.
-- Transfer bleibt nur erlaubt, wenn der annehmende Speicher einen niedrigeren SoC hat als der abgebende Speicher.
-- Die Wechselrichterdrosselung beruecksichtigt weiterhin geplante Speicheraufnahme, damit ein bewusst gestarteter Transfer nicht sofort durch Drosselung unterbunden wird.
-- Blueprint-Name und interne Versionskennung wurden auf v14 aktualisiert.
+Diese README beschreibt die wesentlichen Eingabeparameter, die automatisch erkannten Zendure-/Solarman-/Shelly-Entitäten und die Regeln der Lade-, Entlade- und Speicher-zu-Speicher-Strategie.
 
-Wesentliche Funktionen aus v13/v12/v11
---------------------------------------
-- Jeder "variables:", "choose:" und "conditions:"-Block ist ausfuehrlich kommentiert.
-- Der Regelzyklus laeuft jede Sekunde: time_pattern seconds: "/1".
-- Speicher 1 und Speicher 2 werden als Zendure-Geraete der Integration "zendure_ha" ausgewaehlt; benoetigte Entitaeten werden ueber device_entities() gesucht.
-- Die maximale Entlade-/Transferleistung wird nicht pro Speicher in der Blueprint-Maske abgefragt.
-- Stattdessen sucht der Blueprint je Zendure-Speicher automatisch die Entitaet *_inverse_max_power und verwendet deren aktuellen Wert als Grenze fuer:
-  - normale Entladung zur Hausversorgung,
-  - Speicher-zu-Speicher-Transfer,
-  - gegenseitige Notladeunterstuetzung.
-- Falls die Zendure-output_limit-Number ein kleineres max-Attribut meldet, wird weiterhin der kleinere sichere Wert verwendet.
-- Die AC-Modus-Optionen werden nicht abgefragt:
-  - Laden setzt fest den Zendure-HA-Select-Wert "input".
-  - Entladen setzt fest den Zendure-HA-Select-Wert "output".
-- Die Off-Grid-Modus-Optionen werden nicht abgefragt:
-  - Off-Grid-Port abschalten setzt fest "off".
-  - Off-Grid-Port einschalten setzt fest "normal".
-- Der Speicher mit Wechselrichter am Off-Grid-Port wird separat ausgewaehlt. Nur dieses Geraet wird bei Wechselrichter-Ausfall am Off-Grid-Port geschaltet.
-- Der Solarman-/Deye-Wechselrichter wird ueber number.*_active_power_regulation in Prozent begrenzt.
-- Die kapazitaets- und ladeleistungsbasierte Entladeverteilung gilt bis zur groessten aktuell verfuegbaren Einzel-Speicher-Grenze aus *_inverse_max_power.
-- Wird mehr Leistung benoetigt, wird der Mehrbedarf auf die noch freien Entladekapazitaeten verteilt. Dadurch koennen beide Speicher gleichzeitig bis zu ihrem jeweiligen *_inverse_max_power-Wert liefern.
-- Die normale Entladung zur Hausversorgung wird nicht durch "Maximale Ladeleistung ueber das Hausnetz" begrenzt, sondern durch die Summe der entladefaehigen Speichergrenzen aus *_inverse_max_power.
+Der Blueprint regelt zwei Zendure-Speicher aus der Zendure Home Assistant Integration zusammen mit einem über Solarman angebundenen Wechselrichter. Ziel ist eine möglichst geringe Netzeinspeisung, ohne unnötig Energie zu verlieren, und eine sinnvolle Verteilung zwischen beiden Speichern.
 
-Wesentliche Speicherlogik
--------------------------
-- Wenn beide Speicher voll sind und beide entladen duerfen, wird die Einspeisung bis zur Einzel-Speicher-Grenze gleichmaessig 50/50 verteilt.
-- Wenn beide Speicher nicht voll sind, wird die Einspeisung bis zur Einzel-Speicher-Grenze nach *_available_kwh im Verhaeltnis zu *_total_kwh, zusaetzlich gewichtet durch die aktuelle Batterieladeleistung, verteilt.
-- Ein Speicher mit groesserer verfuegbarer Energie und hoeherer aktueller Batterieladeleistung wird dadurch staerker fuer die Einspeisung genutzt.
-- Speicher an der unteren Entladegrenze werden explizit fuer Einspeisung/Entladung gesperrt:
-  - SoC <= Entlade-Reserve SoC, oder
-  - *_available_kwh <= 0.01 kWh.
-- Wenn nur ein Speicher noch Energie oberhalb der unteren Entladegrenze hat, uebernimmt dieser Speicher die gesamte benoetigte Einspeisung bzw. Entladung bis zu seinem aus *_inverse_max_power gelesenen Leistungsgrenzwert. Der leere bzw. niedrige Speicher erhaelt 0 W Output.
+---
 
-Wichtige Parameter
-------------------
-- Maximale Ladeleistung ueber das Hausnetz: Grenze fuer normale Ueberschussladung und Netz-Notladung. Sie begrenzt nicht die normale Entladung und nicht den Speicher-zu-Speicher-Transfer.
-- Entlade-Reserve SoC: Unterer SoC-Wert. Speicher mit SoC <= diesem Wert werden nicht mehr fuer Einspeisung/Entladung verwendet.
-- Speicher mit Wechselrichter am Off-Grid-Port: muss Speicher 1 oder Speicher 2 sein. Nur dieses Geraet wird fuer die Off-Grid-Sicherheitsabschaltung geschaltet.
-- Tolerierter Quell-Ueberschuss vor Speicher-Transfer: Standard 1000 W. Nicht volle Speicher tauschen nur den Anteil oberhalb dieses Werts aus, nachdem die aktuelle Haus-Einspeisung reserviert wurde.
-- Mindestleistung fuer Speicher-Ausgleich: Unterhalb dieser Leistung wird kein zusaetzlicher Speicher-zu-Speicher-Ausgleich gestartet.
-- Reserve fuer gegenseitige Notaufladung ueber SoC-Limit: Standard 20 Prozentpunkte. Nur darueber darf ein Speicher den anderen bei Notladung versorgen.
-- Wechselrichter maximale AC-Leistung: Basis fuer die Umrechnung von Watt in Prozent fuer Solarman *_active_power_regulation.
+## 1. Grundprinzip
 
-Hinweis
--------
-Der Blueprint verwendet ausschliesslich Zendure-Geraete aus der Integration "zendure_ha" fuer Speicher 1 und Speicher 2. Die benoetigten Entitaeten werden ueber device_entities() anhand typischer Zendure-HA-Suffixe gesucht, z. B. *_total_kwh, *_available_kwh, *_ac_mode, *_input_limit, *_output_limit, *_inverse_max_power und Off-Grid-Suffixe wie *_grid_off_mode, *_off_grid_mode oder *_offgrid_mode.
+Die Automation läuft jede Sekunde.
+
+Der Regelzyklus arbeitet in dieser Reihenfolge:
+
+1. Geräte und Entitäten automatisch erkennen.
+2. Kritische Entitäten und Sensorwerte prüfen.
+3. Off-Grid-Port desjenigen Speichers schützen, an dessen Off-Grid-Port der Wechselrichter angeschlossen ist.
+4. Netzleistung, Speicherzustände, Kapazitäten und technische Leistungsgrenzen einlesen.
+5. Betriebszustand bestimmen: Notladung, Speicher-zu-Speicher-Ausgleich, Überschussladung, Entladung gegen Netzbezug oder Leerlauf.
+6. Zielwerte für beide Speicher berechnen.
+7. Solarman-Wechselrichterleistung in Prozent berechnen.
+8. Neue Werte nur schreiben, wenn sie sich relevant vom aktuellen Zustand unterscheiden.
+
+Wichtig: Die Speicher werden über Zendure-AC-Modi gesteuert. Laden verwendet fest den AC-Modus `input`, Entladen verwendet fest den AC-Modus `output`. Der Off-Grid-Port wird mit `off` ausgeschaltet und mit `normal` eingeschaltet.
+
+---
+
+## 2. Automatisch erkannte Entitäten
+
+In der Blueprint-Maske werden keine einzelnen Zendure-Entitäten mehr ausgewählt. Stattdessen wählst du Geräte aus.
+
+### Speicher 1 und Speicher 2
+
+Für beide Speicher müssen physische Zendure-Geräte aus der Integration `zendure_ha` ausgewählt werden. Der Blueprint sucht innerhalb des jeweiligen Geräts automatisch unter anderem folgende Entitäten:
+
+| Zweck | Typische Zendure-HA-Suffixe |
+|---|---|
+| SoC / Ladezustand | `*_electric_level`, `*_soc_level`, `*_battery_level` |
+| aktuelle Batterieladeleistung | `*_output_pack_power`, `*_battery_input_power`, `*_charge_power` |
+| optionale Batterieentladeleistung | `*_pack_input_power`, `*_battery_output_power`, `*_discharge_power` |
+| Gesamtkapazität | `*_total_kwh` |
+| verfügbare Energie | `*_available_kwh` |
+| AC-Modus | `*_ac_mode`, `*_acmode` |
+| AC-Eingangsgrenze | `*_input_limit`, `*_ac_input_limit`, `*_inputlimit` |
+| AC-Ausgangsgrenze | `*_output_limit`, `*_ac_output_limit`, `*_outputlimit` |
+| maximale Entlade-/Transferleistung | `*_inverse_max_power`, `*_inversemaxpower` |
+| Off-Grid-Port | `*_grid_off_mode`, `*_off_grid_mode`, `*_offgrid_mode` oder passender Switch |
+
+Die Gesamtkapazität wird aus `*_total_kwh` gelesen. Die verfügbare Energie wird aus `*_available_kwh` gelesen. Die maximale Entlade- und Transferleistung wird aus `*_inverse_max_power` gelesen und zusätzlich durch das `max`-Attribut der Zendure-`output_limit`-Number begrenzt, falls dieses kleiner ist.
+
+### Netzanschluss
+
+Für den Netzanschluss wird ein Shelly-Gerät ausgewählt. Der Blueprint sucht bevorzugt eine Gesamtleistungs-Entität wie:
+
+- `*_total_active_power`
+- `*_total_power`
+- `*_active_power_total`
+- `*_power_total`
+
+Erwartete Vorzeichenlogik nach optionaler Invertierung:
+
+- positiver Wert = Netzbezug
+- negativer Wert = Einspeisung
+
+### Wechselrichter
+
+Für den Wechselrichter wird ein Solarman-Gerät ausgewählt. Darin wird die Number-Entität `*_active_power_regulation` gesucht. Diese Entität wird mit einem Prozentwert von 0 bis 100 beschrieben.
+
+Beispiel: Bei `inverter_max_w = 2000 W` entspricht ein Solarman-Wert von 50 Prozent einer Wechselrichterleistung von 1000 W.
+
+---
+
+## 3. Wichtige Parameter
+
+### Netz- und Regelparameter
+
+| Parameter | Bedeutung |
+|---|---|
+| `Netzleistung Vorzeichen invertieren` | Dreht das Vorzeichen des Shelly-Messwerts, falls dein Zähler Einspeisung und Bezug umgekehrt meldet. |
+| `Totband um Nulleinspeisung` | Kleine Leistungsabweichungen innerhalb dieses Bereichs werden ignoriert, damit die Regelung nicht bei jedem Watt nachregelt. |
+| `Mindest-Änderung für neue Leistungsvorgabe` | Ein neuer Zendure-Wert wird nur geschrieben, wenn die Differenz mindestens diesen Wert erreicht. Reduziert unnötige Schreibvorgänge. |
+| `Maximale Ladeleistung über das Hausnetz` | Begrenzt normale Überschussladung und Netz-Notladung. Dieser Wert begrenzt nicht die normale Entladung und nicht den Speicher-zu-Speicher-Transfer. Default: 1000 W. |
+
+### Speicher-SoC-Parameter
+
+| Parameter | Bedeutung |
+|---|---|
+| `Speicher gilt als voll ab SoC` | Ab diesem SoC wird ein Speicher als voll betrachtet. Default: 98 %. |
+| `Entlade-Reserve SoC` | Unterer SoC-Wert für normale Entladung. Speicher mit SoC kleiner/gleich diesem Wert werden nicht mehr zur Hausversorgung entladen. Default: 15 %. |
+| `Netz-Nachladen starten unter SoC` | Unterhalb dieses SoC wird Notladung aktiviert. Default: 10 %. |
+| `Netz-Nachladen fortsetzen bis SoC` | Eine bereits gestartete Notladung läuft bis zu diesem SoC weiter. Default: 20 %. |
+| `Reserve für gegenseitige Notaufladung über SoC-Limit` | Ein Speicher darf einen anderen bei Notladung nur versorgen, wenn er mindestens diesen Abstand oberhalb des Notlade-Startwerts liegt und zugleich höheren SoC hat. Default: 20 Prozentpunkte. |
+| `Mindest-SoC-Vorsprung des abgebenden Speichers` | Speicher-zu-Speicher-Ausgleich ist nur erlaubt, wenn der abgebende Speicher mindestens diesen SoC-Vorsprung hat. Default: 0 %. |
+
+### Speicher-zu-Speicher-Parameter
+
+| Parameter | Bedeutung |
+|---|---|
+| `Tolerierter Quell-Überschuss vor Speicher-Transfer` | Bei nicht vollem abgebendem Speicher wird nur der quellbezogene Überschuss oberhalb dieses Werts an den anderen Speicher weitergegeben. Default: 1000 W. |
+| `Mindestleistung für Speicher-Ausgleich` | Unterhalb dieser final berechneten Transferleistung wird kein zusätzlicher Speicher-zu-Speicher-Ausgleich gestartet. Default: 50 W. |
+
+### Wechselrichterparameter
+
+| Parameter | Bedeutung |
+|---|---|
+| `Wechselrichter - maximale AC-Leistung` | Basis für die Umrechnung von Watt in Prozent für Solarman `*_active_power_regulation`. |
+| `Wechselrichter - minimale erlaubte Leistung` | Untere Grenze, bis zu der der Wechselrichter gedrosselt werden darf. |
+| `Wechselrichter - Drossel-/Entdrossel-Schritt je Regelzyklus` | Schrittweite, mit der der Wechselrichter pro Sekundenzyklus reduziert oder wieder freigegeben wird. |
+| `Wechselrichter wieder entdrosseln unter SoC` | Fällt mindestens ein Speicher unter diesen SoC, wird der Wechselrichter wieder schrittweise entdrosselt. |
+
+---
+
+## 4. Berechnung der Referenz-Netzleistung
+
+Die gemessene Netzleistung wird um bereits gesetzte Speicherbefehle bereinigt. Dadurch erkennt die Automation, was ohne aktuelle Speicherbefehle ungefähr passieren würde.
+
+Formel:
+
+```text
+uncontrolled_grid_power_w = grid_power_w - current_input_total_w + current_output_total_w
+```
+
+Daraus entstehen:
+
+```text
+uncontrolled_import_w = max(0, uncontrolled_grid_power_w)
+uncontrolled_surplus_w = max(0, -uncontrolled_grid_power_w)
+```
+
+Diese Korrektur ist wichtig, weil ein laufender Speicher-zu-Speicher-Transfer sonst fälschlich als normaler Hausverbrauch oder normale Einspeisung interpretiert werden könnte.
+
+Beispiel bei aktivem Transfer:
+
+```text
+abgebender Speicher Output = 800 W
+annehmender Speicher Input = 600 W
+Netto-Beitrag zur Hausversorgung = 800 W - 600 W = 200 W
+```
+
+Der Blueprint betrachtet in diesem Fall nur 200 W als echte Hausversorgung. Dadurch wird ein bewusst gestarteter Transfer im nächsten Sekundenzyklus nicht sofort wieder beendet oder durch Wechselrichterdrosselung unterdrückt.
+
+---
+
+## 5. Betriebszustände und Priorität
+
+Der Blueprint unterscheidet folgende Betriebszustände:
+
+1. `emergency` - Notladung
+2. `balance` - Speicher-zu-Speicher-Ausgleich über das Hausnetz
+3. `surplus` - normale Überschussladung
+4. `import` - Entladung zur Reduzierung von Netzbezug
+5. `idle` - keine relevante Aktion
+
+Die Priorität ist bewusst konservativ:
+
+```text
+Notladung > Speicher-zu-Speicher-Ausgleich > Überschussladung > Entladung gegen Netzbezug > Leerlauf
+```
+
+Notladung hat immer Vorrang. Während einer Notladung wird kein normaler Balance-Transfer gestartet.
+
+---
+
+## 6. Sicherheitslogik
+
+### Fehlende Entitäten
+
+Wenn Pflicht-Entitäten nicht automatisch aus den ausgewählten Geräten erkannt werden, wird eine persistente Home-Assistant-Benachrichtigung erzeugt und der Regelzyklus beendet.
+
+Typische Ursachen:
+
+- Es wurde nicht das physische Zendure-Speichergerät ausgewählt.
+- Speicher 1 und Speicher 2 wurden vertauscht oder doppelt ausgewählt.
+- Entity-IDs wurden manuell so umbenannt, dass typische Suffixe nicht mehr vorhanden sind.
+- Die Solarman-Entität `*_active_power_regulation` fehlt.
+- Das Off-Grid-Gerät ist nicht Speicher 1 oder Speicher 2.
+
+### Ungültige Sensorwerte
+
+Wenn kritische Sensoren `unknown`, `unavailable` oder ungültig sind, setzt der Blueprint beide Speicher sicher auf:
+
+```text
+input_limit = 0 W
+output_limit = 0 W
+```
+
+Danach wird der aktuelle Regelzyklus beendet. Im nächsten Sekundenzyklus wird erneut geprüft.
+
+### Wechselrichter nicht erreichbar
+
+Wenn die Solarman-Entität des Wechselrichters nicht erreichbar ist, wird nur der Off-Grid-Port desjenigen Speichers ausgeschaltet, der in der Blueprint-Maske als Speicher mit angeschlossenem Wechselrichter ausgewählt wurde.
+
+- Select-Entität: Option `off`
+- Switch-Entität: `switch.turn_off`
+
+Sobald der Wechselrichter wieder erreichbar ist, wird genau dieser Port wieder aktiviert:
+
+- Select-Entität: Option `normal`
+- Switch-Entität: `switch.turn_on`
+
+Der Off-Grid-Port des anderen Speichers wird nicht verändert.
+
+---
+
+## 7. Normale Überschussladung
+
+Normale Überschussladung wird aktiv, wenn:
+
+```text
+uncontrolled_surplus_w > Totband
+```
+
+und mindestens ein Speicher noch laden darf.
+
+Ein Speicher darf laden, wenn sein SoC unterhalb der Vollgrenze liegt:
+
+```text
+storage_soc < full_soc - 0.5
+```
+
+Die gesamte Ladeleistung wird begrenzt durch:
+
+```text
+min(
+  uncontrolled_surplus_w,
+  max_house_grid_power_w,
+  Summe der technischen input_limit-Grenzen der ladbaren Speicher
+)
+```
+
+Die Verteilung auf beide Speicher erfolgt gewichtet nach:
+
+```text
+Ladegewicht = Gesamtkapazität in Wh * fehlende Prozentpunkte bis full_soc
+```
+
+Damit erhält ein größerer oder deutlich leererer Speicher mehr Überschussladung.
+
+---
+
+## 8. Normale Entladung zur Hausversorgung
+
+Normale Entladung wird aktiv, wenn:
+
+```text
+uncontrolled_import_w > Totband
+```
+
+und mindestens ein Speicher entladen darf.
+
+Ein Speicher darf nur entladen, wenn:
+
+```text
+SoC > reserve_soc
+und
+available_kwh > 0.01
+```
+
+Wenn ein Speicher diese Grenze erreicht, wird sein Ziel-Output hart auf 0 W gesetzt. Der andere Speicher übernimmt dann die Hausversorgung allein, soweit seine Leistungsgrenze aus `*_inverse_max_power` ausreicht.
+
+### Entladegrenze je Speicher
+
+Die Entladegrenze kommt automatisch aus:
+
+```text
+*_inverse_max_power
+```
+
+Falls das `max`-Attribut der Zendure-`output_limit`-Number kleiner ist, wird der kleinere Wert verwendet:
+
+```text
+storage_max_discharge_w = min(inverse_max_power, output_limit.max)
+```
+
+### Verteilung bei beiden vollen Speichern
+
+Wenn beide Speicher voll sind und beide entladen dürfen, wird die Entladung im gewichteten Bereich gleichmäßig verteilt:
+
+```text
+Speicher 1 = 50 %
+Speicher 2 = 50 %
+```
+
+Beispiel bei beiden Speichern mit 800 W Entladegrenze:
+
+```text
+Hausbedarf 1200 W
+gewichteter Bereich bis 800 W: 400 W + 400 W
+Zusatzbedarf 400 W: 200 W + 200 W
+Ergebnis: 600 W + 600 W
+```
+
+Bei 1600 W Bedarf können beide Speicher jeweils bis zu 800 W liefern, sofern beide oberhalb der Entlade-Reserve liegen.
+
+### Verteilung bei nicht vollen Speichern
+
+Wenn nicht beide Speicher voll sind, wird bis zur größten einzelnen Entladegrenze eine gewichtete Verteilung verwendet. Dabei wird der Speicher stärker genutzt, der mehr verfügbare Energie im Verhältnis zur Gesamtkapazität hat und aktuell stärker geladen wird.
+
+Vereinfacht:
+
+```text
+Basisenergie = max(
+  available_kwh * 1000,
+  total_kwh * 1000 * max(SoC - reserve_soc, 0) / 100
+)
+
+Verfügbarkeitsfaktor = 0.5 + available_kwh / total_kwh
+
+Ladeleistungsfaktor = 1 + min(aktuelle Batterieladeleistung, Referenzlimit) / Referenzlimit
+
+Entladegewicht = Basisenergie * Verfügbarkeitsfaktor * Ladeleistungsfaktor
+```
+
+Damit wird ein Speicher, der gerade deutlich stärker geladen wird oder mehr verfügbare Kapazität hat, stärker zur Hausversorgung herangezogen. So sollen unterschiedliche Kapazitäten besser ausgeglichen werden.
+
+Wenn der Bedarf oberhalb der größten einzelnen Speichergrenze liegt, wird der zusätzliche Bedarf auf die noch freien Entladekapazitäten beider Speicher verteilt. Dadurch können beide Speicher parallel bis zu ihren jeweiligen `*_inverse_max_power`-Grenzen liefern.
+
+---
+
+## 9. Speicher-zu-Speicher-Ausgleich über das Hausnetz
+
+Der Speicher-zu-Speicher-Ausgleich dient dazu, Überschüsse nicht unnötig ins Netz zu drücken oder den Wechselrichter sofort zu drosseln, sondern den anderen Speicher zu laden.
+
+Der Ausgleich ist nur erlaubt, wenn alle Grundbedingungen erfüllt sind:
+
+```text
+keine aktive Notladung
+abgebender Speicher darf entladen
+annehmender Speicher darf laden
+annehmender Speicher hat niedrigeren SoC
+SoC-Vorsprung des abgebenden Speichers >= balance_soc_margin
+Transferleistung >= balance_transfer_min_w
+```
+
+Die Richtung ist immer eindeutig:
+
+- `1_to_2`, wenn Speicher 1 höher liegt und Speicher 2 niedriger liegt
+- `2_to_1`, wenn Speicher 2 höher liegt und Speicher 1 niedriger liegt
+- `none`, wenn keine Richtung zulässig ist
+
+### Regel 1: Nicht voller Speicher mit deutlichem Quell-Überschuss
+
+Bei nicht vollem abgebendem Speicher wird nur der Überschuss oberhalb des Parameters `surplus_exchange_threshold_w` übertragen.
+
+Zuerst wird berechnet, wie viel Leistung für die Hausversorgung reserviert werden muss:
+
+```text
+current_net_storage_output_to_house_w = max(0, current_output_total_w - current_input_total_w)
+
+balance_required_house_output_w = max(
+  current_net_storage_output_to_house_w,
+  uncontrolled_import_w
+)
+```
+
+Dann wird je möglichem abgebendem Speicher berechnet:
+
+```text
+source_surplus_before_threshold = max(
+  0,
+  aktuelle Batterieladeleistung des abgebenden Speichers - balance_required_house_output_w
+)
+```
+
+Zusätzlich muss dieser Quell-Überschuss größer sein als die aktuelle Einspeisung des anderen Speichers. Damit wird verhindert, dass ein Speicher nur deshalb transferiert, weil der andere bereits zur Hausversorgung einspeist.
+
+Danach wird die konfigurierbare Toleranz abgezogen:
+
+```text
+source_surplus_above_threshold = max(
+  0,
+  source_surplus_before_threshold - surplus_exchange_threshold_w
+)
+```
+
+Nur dieser Rest darf als Speicher-zu-Speicher-Transfer genutzt werden.
+
+#### Beispiel für Regel 1
+
+Gegeben:
+
+```text
+Hausverbrauch / reservierte Hausversorgung = 200 W
+Speicher 1 lädt mit 300 W und speist aktuell 100 W ein
+Speicher 2 lädt mit 1000 W und speist aktuell 100 W ein
+surplus_exchange_threshold_w = 200 W
+Speicher 1 hat niedrigeren SoC als Speicher 2
+```
+
+Berechnung für Speicher 2 als abgebender Speicher:
+
+```text
+source_surplus_before_threshold = 1000 W - 200 W = 800 W
+source_surplus_above_threshold = 800 W - 200 W = 600 W
+```
+
+Wenn die technischen Limits es erlauben, lautet das Ziel:
+
+```text
+Speicher 2 output_limit = 200 W Hausversorgung + 600 W Transfer = 800 W
+Speicher 1 input_limit = 600 W
+```
+
+Der Transfer wird also nicht als sofortiger Grund zur Wechselrichterdrosselung bewertet, weil die 600 W bewusst in Speicher 1 aufgenommen werden.
+
+### Regel 2: Abgebender Speicher ist voll
+
+Wenn ein Speicher voll ist, wird sein verfügbarer Überschuss bevorzugt an den anderen Speicher übergeben, sofern der andere Speicher niedrigeren SoC hat und laden kann.
+
+Für volle Speicher wird nicht `surplus_exchange_threshold_w` abgezogen. Stattdessen gilt nur das Totband um die Nulleinspeisung.
+
+Vereinfacht:
+
+```text
+full_surplus_available = max(
+  quellbezogener Überschuss des vollen Speichers,
+  realer berechneter Netzüberschuss
+) - zero_tolerance_w
+```
+
+Dadurch kann auch dann ein Transfer entstehen, wenn ein voller Speicher selbst keine klare Batterieladeleistung mehr meldet, aber am Netzanschluss weiterhin Überschuss sichtbar ist.
+
+### Finale Transferbegrenzung
+
+Der endgültige Transfer ist immer begrenzt durch:
+
+```text
+min(
+  gewünschter Transfer,
+  freie Entlade-/Transferleistung des abgebenden Speichers nach Hausversorgung,
+  Ladegrenze des annehmenden Speichers,
+  verfügbarer Quell-Überschuss
+)
+```
+
+Es gibt kein separates Speicher-zu-Speicher-Transferlimit mehr. Die Grenze ist die Entlade-/Transferleistung des abgebenden Speichers aus `*_inverse_max_power`, abzüglich der für die Hausversorgung reservierten Leistung.
+
+---
+
+## 10. Notladung
+
+Notladung wird aktiv, wenn mindestens ein Speicher unter den Notlade-Startwert fällt:
+
+```text
+SoC <= grid_charge_soc
+```
+
+Eine bereits laufende Notladung wird fortgesetzt, bis der Stop-Wert erreicht ist:
+
+```text
+SoC < grid_charge_stop_soc
+und
+Speicher ist bereits im AC-Modus input
+und
+aktuelles input_limit > min_change_w
+```
+
+### Netz-Notladung
+
+Wenn kein anderer Speicher helfen darf, wird aus dem Hausnetz geladen. Die Gesamtleistung wird begrenzt durch:
+
+```text
+min(
+  Anzahl niedriger Speicher * emergency_charge_w,
+  max_house_grid_power_w,
+  Summe der Ladegrenzen der niedrigen Speicher
+)
+```
+
+Die Verteilung erfolgt nach:
+
+```text
+Notladegewicht = Gesamtkapazität in Wh * fehlende Prozentpunkte bis grid_charge_stop_soc
+```
+
+Ein größerer oder niedrigerer Speicher bekommt dadurch mehr Notladeleistung.
+
+### Gegenseitige Notladeunterstützung
+
+Ein Speicher darf den anderen bei Notladung nur versorgen, wenn:
+
+```text
+der annehmende Speicher Notladung braucht
+abgebender Speicher keine Notladung braucht
+abgebender Speicher entladen darf
+abgebender Speicher SoC >= grid_charge_soc + mutual_emergency_soc_margin
+abgebender Speicher hat höheren SoC als der annehmende Speicher
+```
+
+Wenn diese Bedingungen nicht erfüllt sind, erfolgt die Notladung aus dem Hausnetz.
+
+Die gegenseitige Notladeleistung ist begrenzt durch:
+
+```text
+min(
+  emergency_charge_w,
+  Entladegrenze des abgebenden Speichers,
+  Ladegrenze des annehmenden Speichers
+)
+```
+
+---
+
+## 11. Wechselrichter-Drosselung über Solarman
+
+Der Wechselrichter wird über die Solarman-Entität `*_active_power_regulation` gesteuert. Der Blueprint berechnet zuerst ein Ziel in Watt und wandelt dieses danach in Prozent um:
+
+```text
+active_power_regulation_percent = inverter_target_w / inverter_max_w * 100
+```
+
+### Drosseln
+
+Gedrosselt wird nur, wenn nach geplanter Speicheraufnahme noch Überschuss übrig bleibt und beide Speicher voll sind oder beide Speicher nicht mehr laden können.
+
+Dabei wird berücksichtigt, ob Überschuss bewusst in einen Speicher fließen soll:
+
+```text
+surplus_for_inverter_throttle_w = max(
+  0,
+  uncontrolled_surplus_w - planned_surplus_absorption_w
+)
+```
+
+Wenn ein Speicher-zu-Speicher-Transfer geplant ist, zählt die geplante Aufnahme des annehmenden Speichers als bewusste Überschussverwertung. Der Wechselrichter wird deshalb nicht sofort gedrosselt, solange der andere Speicher den Überschuss aufnehmen soll.
+
+Die Drosselung erfolgt schrittweise:
+
+```text
+inverter_target_w = max(
+  inverter_min_w,
+  inverter_current_w - min(inverter_ramp_w, surplus_for_inverter_throttle_w)
+)
+```
+
+### Entdrosseln
+
+Der Wechselrichter wird wieder schrittweise freigegeben, wenn mindestens eine der Bedingungen erfüllt ist:
+
+```text
+Speicher 1 SoC < inverter_unthrottle_soc
+oder
+Speicher 2 SoC < inverter_unthrottle_soc
+oder
+uncontrolled_import_w > zero_tolerance_w
+```
+
+Dann steigt der Zielwert pro Regelzyklus maximal um `inverter_ramp_w`, aber nicht über `inverter_max_w`.
+
+Wenn Solarman nicht erreichbar ist, wird kein neuer Prozentwert geschrieben. Stattdessen greift die Off-Grid-Sicherheitslogik.
+
+---
+
+## 12. Zielwerte je Speicher
+
+Am Ende des Regelzyklus entstehen vier zentrale Zielwerte:
+
+```text
+storage1_target_input_w
+storage1_target_output_w
+storage2_target_input_w
+storage2_target_output_w
+```
+
+Die Priorität bei der Zielwertbildung lautet:
+
+1. Notladung oder gegenseitige Notladeunterstützung
+2. Speicher-zu-Speicher-Balance
+3. normale Überschussladung
+4. normale Entladung gegen Netzbezug
+5. sonst 0 W
+
+Wenn ein Speicher eine positive Ladeleistung bekommt, wird sein AC-Modus auf `input` gesetzt. Andernfalls wird bei aktiver Entladung `output` gesetzt.
+
+Werte werden nur geschrieben, wenn die Differenz zum aktuellen Wert mindestens `min_change_w` beträgt. Dadurch entstehen weniger unnötige Schreibvorgänge an Zendure.
+
+---
+
+## 13. Typische Zustände und Reaktion
+
+### Zustand A: Beide Speicher sind voll
+
+- Beide Speicher dürfen entladen.
+- Normale Hausversorgung wird gleichmäßig verteilt.
+- Wenn weiterhin Überschuss entsteht und ein Speicher doch noch annehmen kann, wird dieser Überschuss verwendet.
+- Wenn kein Speicher mehr laden kann, wird der Wechselrichter über Solarman schrittweise gedrosselt.
+
+### Zustand B: Speicher 1 ist leer bzw. an der unteren Reserve, Speicher 2 hat genug Energie
+
+- Speicher 1 bekommt `output_limit = 0 W`.
+- Speicher 2 übernimmt die Hausversorgung bis zu seiner `*_inverse_max_power`-Grenze.
+- Wenn Speicher 1 zusätzlich unter dem Notlade-Startwert liegt, wird Notladung aktiv.
+- Speicher 2 darf Speicher 1 nur unterstützen, wenn Speicher 2 oberhalb `grid_charge_soc + mutual_emergency_soc_margin` liegt und höheren SoC hat. Sonst wird aus dem Netz geladen.
+
+### Zustand C: Speicher 2 hat sehr hohe Ladeleistung, Speicher 1 ist niedriger
+
+- Der Blueprint prüft, ob Speicher 2 die aktuelle Hausversorgung voll tragen kann.
+- Danach wird geprüft, ob die Batterieladeleistung von Speicher 2 oberhalb der Toleranz `surplus_exchange_threshold_w` liegt.
+- Nur der Rest oberhalb dieser Toleranz wird an Speicher 1 übertragen.
+- Speicher 1 muss niedrigeren SoC haben und laden können.
+
+### Zustand D: Ein Speicher ist voll, der andere nicht
+
+- Der volle Speicher kann den Überschuss an den niedrigeren Speicher übertragen.
+- Dabei wird `surplus_exchange_threshold_w` nicht abgezogen.
+- Es gelten trotzdem SoC-Richtung, Ladefähigkeit, Entladefähigkeit, technische Grenzen und Mindesttransferleistung.
+
+### Zustand E: Es gibt nur kleinen Überschuss innerhalb des Totbands
+
+- Keine neue Lade- oder Drosselaktion.
+- Kleine Schwankungen werden ignoriert.
+- Bestehende Werte werden nur geändert, wenn die Differenz mindestens `min_change_w` erreicht.
+
+---
+
+## 14. Hinweise zur Inbetriebnahme
+
+1. Zuerst prüfen, ob alle automatisch erkannten Entitäten in Home Assistant vorhanden sind.
+2. Shelly-Vorzeichen prüfen: Bei Netzbezug muss der intern verwendete Wert positiv sein.
+3. `inverter_max_w` passend zum Wechselrichter setzen, damit Solarman-Prozentwerte korrekt berechnet werden.
+4. `full_soc`, `reserve_soc`, `grid_charge_soc` und `grid_charge_stop_soc` an die gewünschte Akkuschonung anpassen.
+5. `surplus_exchange_threshold_w` vorsichtig einstellen:
+   - höherer Wert = weniger Speicher-zu-Speicher-Transfer
+   - niedrigerer Wert = früherer Transfer bei Quell-Überschuss
+6. `balance_soc_margin` kann auf 1 bis 3 Prozent erhöht werden, wenn bei fast gleichen SoC-Werten zu oft die Richtung wechseln würde.
+7. Nicht parallel andere Automationen auf dieselben Zendure-`input_limit`, `output_limit` oder `ac_mode`-Entitäten schreiben lassen.
+
+---
+
+## 15. Kurzform der wichtigsten Formeln
+
+```text
+Netzreferenz ohne aktuelle Speicherbefehle:
+uncontrolled_grid_power = grid_power - current_input_total + current_output_total
+
+Netzbezug:
+uncontrolled_import = max(0, uncontrolled_grid_power)
+
+Überschuss:
+uncontrolled_surplus = max(0, -uncontrolled_grid_power)
+
+Netto-Speicherbeitrag zur Hausversorgung:
+current_net_storage_output_to_house = max(0, current_output_total - current_input_total)
+
+Für Balance reservierte Hausversorgung:
+balance_required_house_output = max(current_net_storage_output_to_house, uncontrolled_import)
+
+Quell-Überschuss bei nicht vollem Speicher:
+source_surplus_before_threshold = max(0, battery_charge_power_source - balance_required_house_output)
+
+Transferfähiger Überschuss bei nicht vollem Speicher:
+source_surplus_above_threshold = max(0, source_surplus_before_threshold - surplus_exchange_threshold_w)
+
+Finaler Speicher-zu-Speicher-Transfer:
+balance_transfer = min(
+  desired_transfer,
+  source_max_discharge - reserved_house_output,
+  target_max_charge,
+  source_surplus_cap
+)
+
+Wechselrichter-Prozentwert:
+active_power_regulation = inverter_target_w / inverter_max_w * 100
+```
