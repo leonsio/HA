@@ -1,48 +1,9 @@
 blueprint:
-  name: Zendure/Solarman Nulleinspeisung mit 2 Speichern - Geraeteauswahl v14
+  name: Zendure/Solarman Nulleinspeisung mit 2 Speichern - Geraeteauswahl v17
   description: >-
     Regelt zwei Zendure-Speicher ueber die offizielle Zendure Home Assistant
     Integration und einen ueber Solarman angebundenen Wechselrichter auf
-    moeglichst geringe Netzeinspeisung. Fuer Speicher 1 und Speicher 2 wird
-    jeweils nur das Home-Assistant-Geraet ausgewaehlt. Die benoetigten
-    Zendure-Entitaeten werden zur Laufzeit aus den Geraete-Entitaeten
-    abgeleitet: electric_level/soc_level, output_pack_power,
-    pack_input_power, total_kwh, available_kwh, ac_mode, input_limit,
-    output_limit, inverse_max_power und
-    optional grid_off_mode bzw. ein Off-Grid-Switch. Der Off-Grid-Port wird
-    nur an dem separat ausgewaehlten Zendure-Speichergeraet geschaltet, an
-    dessen Off-Grid-Port der Wechselrichter angeschlossen ist. Der Netzsensor
-    wird aus einem Shelly-Geraet bevorzugt ueber total_active_power abgeleitet. Die
-    Wechselrichterbegrenzung wird aus dem Solarman-Geraet ueber die Number
-    *_active_power_regulation abgeleitet und als Prozentwert gesetzt. Die
-    Regelung laeuft jede Sekunde. Speicher-zu-Speicher-Transfer ueber das
-    Hausnetz ist nur erlaubt, wenn der annehmende Speicher einen niedrigeren
-    SoC hat als der abgebende Speicher. Fuer nicht volle Speicher wird der
-    Transfer jetzt quellbezogen berechnet: Die aktuelle Batterieladeleistung
-    des abgebenden Speichers muss die aktuell benoetigte Haus-Einspeisung
-    voll abdecken und zusaetzlich den konfigurierten Wert
-    surplus_exchange_threshold_w uebersteigen; nur der Anteil oberhalb dieser
-    Schwelle wird an den anderen Speicher weitergegeben. Ist ein Speicher
-    voll, wird sein verfuegbarer Ueberschuss ohne diese Schwelle, aber mit
-    Totband, an den zweiten Speicher uebergeben. Die normale Ladeleistung aus
-    bzw. ueber das Hausnetz bleibt konfigurierbar. Die Entladung zur
-    Hausversorgung und die Abgabe beim Speicher-zu-Speicher-Transfer werden
-    je Speicher automatisch ueber die Zendure-Entitaet *_inverse_max_power
-    begrenzt. Bei der Einspeisung/Entladung ins Hausnetz
-    wird die kapazitaets- und ladeleistungsbasierte Verteilung nur bis zur
-    automatisch ermittelten Einzel-Speicher-Grenze angewendet; wird mehr
-    Leistung gebraucht, duerfen beide Speicher parallel bis zu ihrem jeweiligen
-    *_inverse_max_power-Wert liefern. Sind beide Speicher voll, werden
-    sie bis zu dieser Grenze gleichmaessig genutzt. Sind beide Speicher nicht
-    voll, wird der Speicher mit groesserer verfuegbarer Energie aus
-    *_available_kwh im Verhaeltnis zur Gesamtkapazitaet und mit hoeherer
-    aktueller Batterieladeleistung staerker herangezogen. Erreicht ein
-    Speicher den unteren SoC-Wert oder meldet keine verfuegbare Energie, wird
-    er fuer die Einspeisung gesperrt; der andere Speicher uebernimmt die
-    Einspeisung dann allein, soweit sein aus *_inverse_max_power gelesener
-    Leistungsgrenzwert ausreicht. Zendure-AC-Modi werden fest mit input zum
-    Laden und output zum Entladen gesetzt. Der Off-Grid-Modus wird fest mit
-    off zum Abschalten und normal zum Einschalten gesetzt.
+    moeglichst geringe Netzeinspeisung. 
   domain: automation
   input:
     grid_meter_device:
@@ -123,9 +84,10 @@ blueprint:
     inverter_max_w:
       name: Wechselrichter - maximale AC-Leistung
       description: >-
-        Maximale Wechselrichterleistung in Watt. Daraus wird die Prozentgrenze
-        fuer Solarman *_active_power_regulation berechnet. Beispiel: 2000 W
-        Maximalleistung und Ziel 1000 W ergeben 50 Prozent.
+        Maximale Wechselrichterleistung in Watt. Dieser Wert wird fuer die
+        Diagnose-Umrechnung zwischen Solarman-Prozentwerten und Watt genutzt.
+        Die eigentliche Drosselung wird ab v17 direkt ueber den festen
+        Prozentwert "Wechselrichter - fester Drosselwert" gesetzt.
       default: 2000
       selector:
         number:
@@ -134,25 +96,21 @@ blueprint:
           step: 10
           unit_of_measurement: W
           mode: box
-    inverter_min_w:
-      name: Wechselrichter - minimale erlaubte Leistung
-      default: 0
+    inverter_throttle_percent:
+      name: Wechselrichter - fester Drosselwert
+      description: >-
+        Prozentwert, auf den Solarman *_active_power_regulation gesetzt wird,
+        wenn beide Speicher voll sind oder keine Ladeaufnahme mehr moeglich ist
+        und nach geplanter Speicheraufnahme weiterhin Einspeiseueberschuss
+        vorhanden ist. Die Hoehe der Drosselung haengt nicht vom
+        Hausverbrauch oder vom Ueberschusswert ab. Default: 50 Prozent.
+      default: 50
       selector:
         number:
           min: 0
-          max: 5000
-          step: 10
-          unit_of_measurement: W
-          mode: box
-    inverter_ramp_w:
-      name: Wechselrichter - Drossel-/Entdrossel-Schritt je Regelzyklus
-      default: 100
-      selector:
-        number:
-          min: 10
-          max: 2000
-          step: 10
-          unit_of_measurement: W
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
           mode: slider
     inverter_unthrottle_soc:
       name: Wechselrichter wieder entdrosseln unter SoC
@@ -341,7 +299,7 @@ variables:
   # Detail: Die Marke kann in Trace-Ausgaben, Logbuch oder beim Vergleichen mehrerer Blueprint-Dateien helfen.
   # Detail: Es werden hier keine Geraete gelesen, keine Leistungen berechnet und keine Entitaeten veraendert.
   # Setzt nur die interne Versionskennung fuer Diagnose und Nachvollziehbarkeit; es wird keine Steuerentscheidung berechnet.
-  blueprint_version: "2026-05-22-zendure-device-v14-source-surplus-exchange"
+  blueprint_version: "2026-05-26-zendure-device-v17-charge-source-fixed-inverter-throttle"
 
 mode: single
 max_exceeded: silent
@@ -362,8 +320,7 @@ action:
       invert_grid_sign_value: !input invert_grid_sign
 
       inverter_max_w_value: !input inverter_max_w
-      inverter_min_w_value: !input inverter_min_w
-      inverter_ramp_w_value: !input inverter_ramp_w
+      inverter_throttle_percent_value: !input inverter_throttle_percent
       inverter_unthrottle_soc_value: !input inverter_unthrottle_soc
 
       # Feste Zendure-HA-Optionsnamen: AC input = Laden, AC output = Entladen.
@@ -389,7 +346,7 @@ action:
       # Block: Entitaeten automatisch aus den ausgewaehlten Geraeten ableiten.
       # Detail: Fuer jedes ausgewaehlte Home-Assistant-Geraet werden alle zugeordneten Entitaeten mit device_entities() durchsucht.
       # Detail: Der Blueprint sucht keine frei waehlbaren Einzelentitaeten mehr, sondern erkennt die benoetigten Zendure-HA-, Shelly- und Solarman-Entitaeten anhand von Domain und typischen Suffixen.
-      # Detail: Fuer die Speicher werden SoC, Batterie-Ladeleistung, optionale Entladeleistung, *_total_kwh, *_available_kwh, ac_mode, input_limit, output_limit und *_inverse_max_power gesucht.
+      # Detail: Fuer die Speicher werden SoC, Batterie-Ladeleistung, optionale Entladeleistung, *_total_kwh, *_available_kwh, *_grid_off_power, *_solar_input_power, ac_mode, input_limit, output_limit und *_inverse_max_power gesucht.
       # Detail: Fuer den Off-Grid-Port wird nur im separat ausgewaehlten Speichergeraet gesucht, damit nicht versehentlich der Off-Grid-Port des anderen Speichers geschaltet wird.
       # Detail: Fuer den Wechselrichter wird innerhalb des Solarman-Geraets die Number-Entitaet *_active_power_regulation gesucht, weil diese spaeter den Prozentwert erhaelt.
       # Berechnet bzw. sucht die benoetigten Entity-IDs anhand typischer Zendure-HA-, Shelly- und Solarman-Suffixe; die Entladegrenze kommt aus *_inverse_max_power.
@@ -453,6 +410,24 @@ action:
         {% for e in device_entities(storage1_device_id) if e.startswith('sensor.') %}
           {% set oid = e.split('.', 1)[1] %}
           {% if ns.e == '' and oid.endswith('_available_kwh') %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage1_grid_off_power_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_grid_off_power') or oid.endswith('_gridoffpower') or oid.endswith('_off_grid_power') or oid.endswith('_offgrid_power')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage1_solar_input_power_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage1_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_solar_input_power') or oid.endswith('_solarinputpower') or oid.endswith('_pv_input_power')) %}
             {% set ns.e = e %}
           {% endif %}
         {% endfor %}
@@ -556,6 +531,24 @@ action:
           {% endif %}
         {% endfor %}
         {{ ns.e }}
+      storage2_grid_off_power_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_grid_off_power') or oid.endswith('_gridoffpower') or oid.endswith('_off_grid_power') or oid.endswith('_offgrid_power')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
+      storage2_solar_input_power_sensor_entity: >-
+        {% set ns = namespace(e='') %}
+        {% for e in device_entities(storage2_device_id) if e.startswith('sensor.') %}
+          {% set oid = e.split('.', 1)[1] %}
+          {% if ns.e == '' and (oid.endswith('_solar_input_power') or oid.endswith('_solarinputpower') or oid.endswith('_pv_input_power')) %}
+            {% set ns.e = e %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.e }}
       storage2_ac_select_entity: >-
         {% set ns = namespace(e='') %}
         {% for e in device_entities(storage2_device_id) if e.startswith('select.') %}
@@ -652,6 +645,8 @@ action:
         {% if storage1_battery_charge_power_sensor_entity == '' %}{% set missing = missing + ['Speicher 1 output_pack_power'] %}{% endif %}
         {% if storage1_total_kwh_sensor_entity == '' %}{% set missing = missing + ['Speicher 1 total_kwh'] %}{% endif %}
         {% if storage1_available_kwh_sensor_entity == '' %}{% set missing = missing + ['Speicher 1 available_kwh'] %}{% endif %}
+        {% if storage1_grid_off_power_sensor_entity == '' %}{% set missing = missing + ['Speicher 1 grid_off_power'] %}{% endif %}
+        {% if storage1_solar_input_power_sensor_entity == '' %}{% set missing = missing + ['Speicher 1 solar_input_power'] %}{% endif %}
         {% if storage1_ac_select_entity == '' %}{% set missing = missing + ['Speicher 1 ac_mode'] %}{% endif %}
         {% if storage1_input_number_entity == '' %}{% set missing = missing + ['Speicher 1 input_limit'] %}{% endif %}
         {% if storage1_output_number_entity == '' %}{% set missing = missing + ['Speicher 1 output_limit'] %}{% endif %}
@@ -660,6 +655,8 @@ action:
         {% if storage2_battery_charge_power_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 output_pack_power'] %}{% endif %}
         {% if storage2_total_kwh_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 total_kwh'] %}{% endif %}
         {% if storage2_available_kwh_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 available_kwh'] %}{% endif %}
+        {% if storage2_grid_off_power_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 grid_off_power'] %}{% endif %}
+        {% if storage2_solar_input_power_sensor_entity == '' %}{% set missing = missing + ['Speicher 2 solar_input_power'] %}{% endif %}
         {% if storage2_ac_select_entity == '' %}{% set missing = missing + ['Speicher 2 ac_mode'] %}{% endif %}
         {% if storage2_input_number_entity == '' %}{% set missing = missing + ['Speicher 2 input_limit'] %}{% endif %}
         {% if storage2_output_number_entity == '' %}{% set missing = missing + ['Speicher 2 output_limit'] %}{% endif %}
@@ -723,9 +720,19 @@ action:
       storage2_soc: "{{ states(storage2_soc_sensor_entity) | float(0) }}"
 
       # Batterieladeleistung laut Zendure-Integration.
-      # Negative oder unplausible Werte werden auf 0 begrenzt, damit nur echte Ladeleistung zaehlt.
-      storage1_batt_charge_w: "{{ ([states(storage1_battery_charge_power_sensor_entity) | float(0), 0] | max) | round(0) }}"
-      storage2_batt_charge_w: "{{ ([states(storage2_battery_charge_power_sensor_entity) | float(0), 0] | max) | round(0) }}"
+      # Zuerst wird der bisherige Gesamt-/Pack-Ladesensor gelesen. Anschliessend werden die expliziten Ladequellen aus Zendure-HA addiert:
+      # *_grid_off_power wird absolut genommen, weil Zendure diesen Wert je nach Richtung auch negativ melden kann; *_solar_input_power wird nur positiv gewertet.
+      # Fuer die Regelung wird der groessere Wert aus Pack-Ladeleistung und Quellen-Summe verwendet, damit die neue Verteilung Off-Grid- und Solar-Ladung beruecksichtigt, ohne bekannte Gesamtwerte doppelt zu zaehlen.
+      storage1_pack_charge_w: "{{ ([states(storage1_battery_charge_power_sensor_entity) | float(0), 0] | max) | round(0) }}"
+      storage2_pack_charge_w: "{{ ([states(storage2_battery_charge_power_sensor_entity) | float(0), 0] | max) | round(0) }}"
+      storage1_grid_off_charge_w: "{{ ((states(storage1_grid_off_power_sensor_entity) | float(0)) | abs) | round(0) }}"
+      storage2_grid_off_charge_w: "{{ ((states(storage2_grid_off_power_sensor_entity) | float(0)) | abs) | round(0) }}"
+      storage1_solar_input_w: "{{ ([states(storage1_solar_input_power_sensor_entity) | float(0), 0] | max) | round(0) }}"
+      storage2_solar_input_w: "{{ ([states(storage2_solar_input_power_sensor_entity) | float(0), 0] | max) | round(0) }}"
+      storage1_charge_source_w: "{{ (storage1_grid_off_charge_w | float(0) + storage1_solar_input_w | float(0)) | round(0) }}"
+      storage2_charge_source_w: "{{ (storage2_grid_off_charge_w | float(0) + storage2_solar_input_w | float(0)) | round(0) }}"
+      storage1_batt_charge_w: "{{ ([storage1_pack_charge_w | float(0), storage1_charge_source_w | float(0), 0] | max) | round(0) }}"
+      storage2_batt_charge_w: "{{ ([storage2_pack_charge_w | float(0), storage2_charge_source_w | float(0), 0] | max) | round(0) }}"
 
       # Batterie-Entladeleistung, falls die Integration einen passenden Sensor liefert.
       # Der Wert wird nur fuer Diagnose und robuste Plausibilitaet mitgefuehrt.
@@ -814,6 +821,10 @@ action:
            or states(storage2_total_kwh_sensor_entity) in ['unknown', 'unavailable', 'none']
            or states(storage1_available_kwh_sensor_entity) in ['unknown', 'unavailable', 'none']
            or states(storage2_available_kwh_sensor_entity) in ['unknown', 'unavailable', 'none']
+           or states(storage1_grid_off_power_sensor_entity) in ['unknown', 'unavailable', 'none']
+           or states(storage2_grid_off_power_sensor_entity) in ['unknown', 'unavailable', 'none']
+           or states(storage1_solar_input_power_sensor_entity) in ['unknown', 'unavailable', 'none']
+           or states(storage2_solar_input_power_sensor_entity) in ['unknown', 'unavailable', 'none']
            or states(storage1_inverse_max_power_entity) in ['unknown', 'unavailable', 'none']
            or states(storage2_inverse_max_power_entity) in ['unknown', 'unavailable', 'none']
            or (storage1_total_kwh | float(0)) <= 0
@@ -1052,7 +1063,7 @@ action:
       # Detail: Regel 1 fuer nicht volle Speicher: Der abgebende Speicher muss mit seiner aktuellen Batterieladeleistung zuerst die aktuell benoetigte Haus-Einspeisung voll abdecken koennen.
       # Detail: Nur wenn danach noch mehr als surplus_exchange_threshold_w uebrig bleibt, wird genau der Anteil oberhalb dieser Schwelle zum Laden des anderen Speichers freigegeben.
       # Detail: Beispiel: 1000 W Batterieladung, 100 W bisheriger Output von Speicher 1, 100 W bisheriger Output von Speicher 2 und 200 W Schwelle ergeben 1000 - 200 - 200 = 600 W Transfer.
-      # Detail: Regel 2 fuer volle Speicher: Ist ein Speicher voll, wird sein verfuegbarer Ueberschuss an den zweiten Speicher uebergeben; dabei werden SoC-Richtung, Ladefaehigkeit und Leistungsgrenzen weiterhin beachtet.
+      # Detail: Regel 2 fuer volle Speicher: Ist genau ein Speicher voll und hat er mehr aktuelle Ladeleistung als fuer die Hausversorgung reserviert wird, uebernimmt dieser Speicher zuerst die komplette Hausversorgung bis zu *_inverse_max_power. Nur der darueber verbleibende Ueberschuss wird an den zweiten Speicher uebergeben; dabei werden SoC-Richtung, Ladefaehigkeit und Leistungsgrenzen weiterhin beachtet.
       # Detail: Das Ergebnis balance_direction legt eindeutig fest, ob 1_to_2, 2_to_1 oder kein Transfer ausgefuehrt wird.
       # Berechnet Grundzustand, die fuer Hausversorgung reservierte Output-Leistung, quellbezogenen Ueberschuss, Vollspeicher-Transfer und finale Balance-Richtung.
       # Grundzustand der Energiefluesse ohne Speicher-zu-Speicher-Transfer.
@@ -1120,7 +1131,7 @@ action:
       storage2_source_surplus_covers_other_current_output: >-
         {{ (storage2_source_surplus_before_exchange_threshold_w | float(0)) > (storage1_current_output_w | float(0)) }}
 
-      # Fuer volle Speicher wird als verfuegbarer Vollspeicher-Ueberschuss der groessere Wert aus quellbezogenem Batterielade-Ueberschuss und realem Netzüberschuss verwendet.
+      # Fuer volle Speicher wird als verfuegbarer Vollspeicher-Ueberschuss der groessere Wert aus quellbezogenem Lade-Ueberschuss und realem Netzüberschuss verwendet.
       # Danach wird nur das Totband abgezogen, nicht die konfigurierbare Transfer-Schwelle, weil ein voller Speicher keine weitere Reserve aufnehmen kann.
       storage1_full_surplus_available_for_exchange_w: >-
         {% set source_surplus = storage1_source_surplus_before_exchange_threshold_w | float(0) %}
@@ -1290,11 +1301,11 @@ action:
       # Block: normale Lade- und Entladeverteilung ohne aktiven Speicher-zu-Speicher-Transfer berechnen.
       # Detail: Dieser Block beschreibt den Normalbetrieb, wenn kein Balance-Transfer aktiv ist.
       # Detail: Bei Ueberschuss wird Ladeleistung auf Speicher verteilt, die noch laden duerfen; die Verteilung bevorzugt groessere Kapazitaet und niedrigeren SoC.
-      # Detail: Bei Netzbezug wird Entladeleistung zuerst bis zur Einzel-Speicher-Grenze nach Kapazitaet, *_available_kwh und aktueller Batterieladeleistung gewichtet.
+      # Detail: Bei Netzbezug wird Entladeleistung zuerst bis zur Einzel-Speicher-Grenze nach *_available_kwh und aktueller Ladeleistung aus *_grid_off_power plus *_solar_input_power gewichtet.
       # Detail: Sind beide Speicher voll, wird in diesem gewichteten Bereich bewusst 50/50 verteilt, sofern beide oberhalb der Entlade-Reserve liegen.
       # Detail: Wird mehr Leistung benoetigt als die gewichtete Einzel-Speicher-Stufe, wird der Mehrbedarf auf freie Entladekapazitaeten beider Speicher verteilt, sodass beide parallel bis zu ihren Grenzen liefern koennen.
       # Detail: Ein Speicher am unteren SoC-/available_kwh-Limit bekommt Gewicht und Ziel-Output 0; der andere Speicher uebernimmt dann allein bis zu seiner Grenze.
-      # Verteilt Ueberschussladung und Entladung gegen Netzbezug proportional nach Kapazitaet, SoC, *_available_kwh und aktueller Batterieladeleistung.
+      # Verteilt Ueberschussladung und Entladung gegen Netzbezug proportional nach Kapazitaet, SoC, *_available_kwh sowie aktueller Off-Grid-/Solar-Ladeleistung.
       # Speicher an der unteren Entladegrenze erhalten Gewicht 0; der andere Speicher uebernimmt dann die volle benoetigte Einspeiseleistung bis zu seinem Limit.
       # Normale Ueberschussladung ohne Speicher-zu-Speicher-Transfer.
       # Berechnung: verfuegbarer Ueberschuss, begrenzt durch Hausnetzlimit und Ladefaehigkeit beider Speicher.
@@ -1336,46 +1347,76 @@ action:
           0
         {% endif %}
 
+      # Entlade-Dominanzentscheidung fuer die Hausversorgung.
+      # Dieser Wert kann "1", "2" oder "none" sein. Er wird nur im Importmodus benutzt.
+      # Vorrang 1: Ist genau ein Speicher voll und seine aktuelle Ladeleistung aus *_grid_off_power + *_solar_input_power bzw. output_pack_power reicht bis zu seiner Entladegrenze fuer die Hauslast, uebernimmt dieser volle Speicher die Hausversorgung allein.
+      # Vorrang 2: Ist kein solcher Vollspeicherfall aktiv, uebernimmt ein Speicher allein, wenn seine Ladeleistung mindestens doppelt so hoch wie die des anderen Speichers ist und die benoetigte Hausversorgung bis zu seiner *_inverse_max_power-Grenze abdecken kann.
+      # Sobald der Hausverbrauch die *_inverse_max_power-Grenze des dominanten Speichers uebersteigt, wird der Restbedarf spaeter automatisch auf den zweiten Speicher gelegt.
+      no_balance_output_dominant_source: >-
+        {% set demand = no_balance_base_output_total_w | float(0) %}
+        {% set dominant_ratio = 2.0 %}
+        {% if (normal_mode | trim) == 'import' and demand > 0 %}
+          {% set s1_need = [demand, storage1_max_discharge_w | float(0)] | min %}
+          {% set s2_need = [demand, storage2_max_discharge_w | float(0)] | min %}
+          {% if (storage1_full | bool(false)) and not (storage2_full | bool(false)) and (storage1_can_discharge | bool(false)) and (storage1_batt_charge_w | float(0)) >= s1_need and s1_need > 0 %}
+            1
+          {% elif (storage2_full | bool(false)) and not (storage1_full | bool(false)) and (storage2_can_discharge | bool(false)) and (storage2_batt_charge_w | float(0)) >= s2_need and s2_need > 0 %}
+            2
+          {% elif (storage1_can_discharge | bool(false)) and s1_need > 0 and (storage1_batt_charge_w | float(0)) >= s1_need and (storage1_batt_charge_w | float(0)) >= ((storage2_batt_charge_w | float(0)) * dominant_ratio) and (storage1_batt_charge_w | float(0)) >= ((storage2_batt_charge_w | float(0)) + (balance_transfer_min_w_value | float(50))) %}
+            1
+          {% elif (storage2_can_discharge | bool(false)) and s2_need > 0 and (storage2_batt_charge_w | float(0)) >= s2_need and (storage2_batt_charge_w | float(0)) >= ((storage1_batt_charge_w | float(0)) * dominant_ratio) and (storage2_batt_charge_w | float(0)) >= ((storage1_batt_charge_w | float(0)) + (balance_transfer_min_w_value | float(50))) %}
+            2
+          {% else %}
+            none
+          {% endif %}
+        {% else %}
+          none
+        {% endif %}
+
       # Entlade-/Einspeisegewicht Speicher 1.
       # Entscheidung: Wenn Speicher 1 die untere Entladegrenze erreicht hat, ist storage1_can_discharge false und das Gewicht wird 0.
+      # Wenn der Dominanzfall Speicher 1 gewaehlt hat, bekommt Speicher 1 Gewicht 1 und Speicher 2 Gewicht 0; dadurch liefert Speicher 1 allein bis zu seiner *_inverse_max_power-Grenze.
       # Sind beide Speicher voll und entladefaehig, wird Speicher 1 mit Gewicht 1 bewertet, damit spaeter eine 50/50-Verteilung entsteht.
-      # Sonst: verfuegbare Energie aus *_available_kwh bestimmt die Basis; das Verhaeltnis *_available_kwh / *_total_kwh und die aktuelle Batterieladeleistung erhoehen das Gewicht.
-      # Berechnung bei nicht vollen Speichern:
-      #   nutzbare Basisenergie = max(available_kwh * 1000, capacity_wh * max(SoC - Reserve, 0) / 100)
-      #   Verfuegbarkeitsfaktor = 0.5 + available_kwh / total_kwh
-      #   Ladeleistungsfaktor = 1 + min(aktuelle Batterieladeleistung, Referenzlimit) / Referenzlimit
-      #   Referenzlimit = max(maximale Ladeleistung ueber Hausnetz, Entladegrenze Speicher 1, Entladegrenze Speicher 2, 1)
-      #   Gewicht = Basisenergie * Verfuegbarkeitsfaktor * Ladeleistungsfaktor
+      # Sonst wird ein Mischgewicht berechnet: Anteil an der aktuell verfuegbaren Energie aus *_available_kwh plus doppelt gewichteter Anteil an der aktuellen Ladeleistung aus *_grid_off_power und *_solar_input_power.
+      # Dadurch wird ein Speicher mit mehr verfuegbarer Energie und gleichzeitig hoeherer aktueller Ladeleistung staerker fuer die Hausversorgung genutzt.
       no_balance_output_weight_1: >-
         {% if (normal_mode | trim) == 'import' and (storage1_can_discharge | bool(false)) %}
-          {% if (both_storages_full | bool(false)) and (storage2_can_discharge | bool(false)) %}
+          {% if (no_balance_output_dominant_source | trim) == '1' %}
+            1
+          {% elif (no_balance_output_dominant_source | trim) == '2' %}
+            0
+          {% elif (both_storages_full | bool(false)) and (storage2_can_discharge | bool(false)) %}
             1
           {% else %}
-            {% set fallback_wh = (storage1_capacity_wh | float(1)) * ([(storage1_soc | float(0)) - (reserve_soc_value | float(15)), 0] | max) / 100 %}
-            {% set base_wh = [storage1_available_wh | float(0), fallback_wh, 1] | max %}
+            {% set available_total = [storage1_available_wh | float(0) + storage2_available_wh | float(0), 1] | max %}
+            {% set charge_total = (storage1_batt_charge_w | float(0)) + (storage2_batt_charge_w | float(0)) %}
+            {% set available_share = (storage1_available_wh | float(0)) / available_total %}
+            {% set charge_share = ((storage1_batt_charge_w | float(0)) / charge_total) if charge_total > 0 else available_share %}
             {% set availability_factor = 0.5 + (storage1_available_ratio | float(0)) %}
-            {% set ref = [max_house_grid_power_w_value | float(1000), storage1_max_discharge_w | float(0), storage2_max_discharge_w | float(0), 1] | max %}
-            {% set charge_factor = 1 + ([storage1_batt_charge_w | float(0), ref] | min) / ref %}
-            {{ (base_wh * availability_factor * charge_factor) | round(2) }}
+            {{ ([0.001, ((available_share * 1.0) + (charge_share * 2.0)) * availability_factor] | max) | round(4) }}
           {% endif %}
         {% else %}
           0
         {% endif %}
 
-      # Entlade-/Einspeisegewicht Speicher 2 mit gleicher Berechnung wie Speicher 1.
-      # Wenn Speicher 2 die untere Entladegrenze erreicht hat, ist storage2_can_discharge false und das Gewicht wird 0.
-      # Wenn beide Speicher voll sind, erhaelt Speicher 2 ebenfalls Gewicht 1; andernfalls entscheidet die verfuegbare Energie, das Kapazitaetsverhaeltnis und die aktuelle Batterieladeleistung.
+      # Entlade-/Einspeisegewicht Speicher 2 mit gleicher Logik wie Speicher 1.
+      # Dominanz zugunsten Speicher 2 fuehrt zu Gewicht 1 fuer Speicher 2 und 0 fuer Speicher 1.
+      # Ohne Dominanz werden *_available_kwh und die aktuelle Ladeleistung aus Off-Grid plus Solar kombiniert, wobei die Ladeleistung bewusst staerker gewichtet wird.
       no_balance_output_weight_2: >-
         {% if (normal_mode | trim) == 'import' and (storage2_can_discharge | bool(false)) %}
-          {% if (both_storages_full | bool(false)) and (storage1_can_discharge | bool(false)) %}
+          {% if (no_balance_output_dominant_source | trim) == '2' %}
+            1
+          {% elif (no_balance_output_dominant_source | trim) == '1' %}
+            0
+          {% elif (both_storages_full | bool(false)) and (storage1_can_discharge | bool(false)) %}
             1
           {% else %}
-            {% set fallback_wh = (storage2_capacity_wh | float(1)) * ([(storage2_soc | float(0)) - (reserve_soc_value | float(15)), 0] | max) / 100 %}
-            {% set base_wh = [storage2_available_wh | float(0), fallback_wh, 1] | max %}
+            {% set available_total = [storage1_available_wh | float(0) + storage2_available_wh | float(0), 1] | max %}
+            {% set charge_total = (storage1_batt_charge_w | float(0)) + (storage2_batt_charge_w | float(0)) %}
+            {% set available_share = (storage2_available_wh | float(0)) / available_total %}
+            {% set charge_share = ((storage2_batt_charge_w | float(0)) / charge_total) if charge_total > 0 else available_share %}
             {% set availability_factor = 0.5 + (storage2_available_ratio | float(0)) %}
-            {% set ref = [max_house_grid_power_w_value | float(1000), storage1_max_discharge_w | float(0), storage2_max_discharge_w | float(0), 1] | max %}
-            {% set charge_factor = 1 + ([storage2_batt_charge_w | float(0), ref] | min) / ref %}
-            {{ (base_wh * availability_factor * charge_factor) | round(2) }}
+            {{ ([0.001, ((available_share * 1.0) + (charge_share * 2.0)) * availability_factor] | max) | round(4) }}
           {% endif %}
         {% else %}
           0
@@ -1386,13 +1427,19 @@ action:
       no_balance_input_weight_total: "{{ (no_balance_input_weight_1 | float(0)) + (no_balance_input_weight_2 | float(0)) }}"
       no_balance_output_weight_total: "{{ (no_balance_output_weight_1 | float(0)) + (no_balance_output_weight_2 | float(0)) }}"
 
-      # Grenze fuer die bisherige gewichtete Entladeverteilung.
-      # Berechnung: groesste aus *_inverse_max_power ermittelte Einzel-Entladegrenze der entladefaehigen Speicher.
-      # Bei zwei Speichern richtet sich dieser Wert nach dem groessten aktuell aus *_inverse_max_power gelesenen Speicherwert. Bis zu dieser Gesamtleistung gilt die kapazitaets- und ladeleistungsbasierte Einteilung.
+      # Grenze fuer die gewichtete bzw. dominante Entladeverteilung.
+      # Normalfall: bis zur groessten Einzel-Entladegrenze wird nach den Gewichten aus *_available_kwh und Ladeleistung verteilt.
+      # Dominanzfall: die Grenze ist bewusst die *_inverse_max_power-Grenze des dominanten Speichers, damit dieser die Hausversorgung allein uebernimmt; erst der Bedarf oberhalb dieser Grenze wird als Parallel-Zusatzbedarf auf den anderen Speicher verteilt.
       no_balance_weighted_output_tier_limit_w: >-
         {% set s1 = storage1_max_discharge_w | float(0) if (storage1_can_discharge | bool(false)) else 0 %}
         {% set s2 = storage2_max_discharge_w | float(0) if (storage2_can_discharge | bool(false)) else 0 %}
-        {{ ([s1, s2] | max) | round(0) }}
+        {% if (no_balance_output_dominant_source | trim) == '1' %}
+          {{ s1 | round(0) }}
+        {% elif (no_balance_output_dominant_source | trim) == '2' %}
+          {{ s2 | round(0) }}
+        {% else %}
+          {{ ([s1, s2] | max) | round(0) }}
+        {% endif %}
 
       # Anteil des Entladebedarfs, der nach der bisherigen Gewichtungslogik verteilt wird.
       # Berechnung: min(Gesamtbedarf, groesste Einzel-Entladegrenze).
@@ -1587,7 +1634,7 @@ action:
       # Detail: In diesem Block werden aus allen Vorentscheidungen konkrete Watt-Zielwerte fuer input_limit und output_limit beider Speicher gebildet.
       # Detail: Die Prioritaet ist fest: zuerst Notladung, dann aktiver Speicher-zu-Speicher-Ausgleich, dann normale Ueberschussladung oder normale Entladung gegen Netzbezug.
       # Detail: Bei Balance erhaelt der annehmende Speicher die Transfer-Ladeleistung; der abgebende Speicher erhaelt als Output die Summe aus reservierter Hausversorgung und Transfer.
-      # Detail: Bei Import nutzt der Block die zuvor berechnete kapazitaets- und ladeleistungsbasierte Entladeverteilung inklusive Zusatzbedarf oberhalb der Einzel-Speicher-Grenze.
+      # Detail: Bei Import nutzt der Block die zuvor berechnete kapazitaets- und ladequellenbasierte Entladeverteilung inklusive Dominanzfall und Zusatzbedarf oberhalb der Einzel-Speicher-Grenze.
       # Detail: Die harte can_discharge-Pruefung am Anfang der Output-Berechnung verhindert, dass ein Speicher am unteren SoC-Limit trotzdem aus einem anderen Zweig heraus entladen wird.
       # Entscheidet je Speicher zwischen Notladung, Balance-Transfer, Ueberschussladung, Entladung gegen Netzbezug oder 0 W.
       # Ziel-Ladeleistung Speicher 1.
@@ -1659,9 +1706,9 @@ action:
       # Detail: planned_surplus_absorption_w verhindert vorschnelles Drosseln des Wechselrichters, wenn Ueberschuss bewusst zur Speicherladung oder zum Speicher-zu-Speicher-Transfer genutzt wird.
       # Detail: Im Balance-Modus ist planned_output_total_w groesser als planned_input_total_w, weil der abgebende Speicher zusaetzlich die Hausversorgung uebernimmt.
       # Detail: Nur Ueberschuss, der nach geplanter Speicheraufnahme uebrig bleibt, fliesst in surplus_for_inverter_throttle_w ein.
-      # Detail: Der Wechselrichter wird schrittweise gedrosselt, wenn beide Speicher voll sind oder nicht mehr laden koennen; er wird wieder entdrosselt, wenn ein Speicher unter die Entdrossel-Schwelle faellt oder Netzbezug erkannt wird.
+      # Detail: Der Wechselrichter wird bei Drosselbedarf direkt auf den festen konfigurierten Prozentwert gesetzt; er wird wieder direkt auf 100 Prozent freigegeben, wenn ein Speicher unter die Entdrossel-Schwelle faellt oder Netzbezug erkannt wird.
       # Detail: Am Ende wird die Watt-Zielgroesse in den Prozentwert fuer Solarman *_active_power_regulation umgerechnet.
-      # Berechnet AC-Modi, geplante Lade-/Entladesummen, erwartete Netzleistung, verbleibenden Drossel-Ueberschuss und Prozentwert fuer *_active_power_regulation.
+      # Berechnet AC-Modi, geplante Lade-/Entladesummen, erwartete Netzleistung, verbleibenden Drossel-Ueberschuss und den festen Prozent-Zielwert fuer *_active_power_regulation.
       # Zielmodus Speicher 1: fester Zendure-HA-Modus input, wenn geladen werden soll, sonst fester Modus output.
       storage1_target_mode: >-
         {% if (storage1_target_input_w | float(0)) > 0 %}
@@ -1703,32 +1750,49 @@ action:
       surplus_for_inverter_throttle_w: >-
         {{ ([0, (uncontrolled_surplus_w | float(0)) - (planned_surplus_absorption_w | float(0))] | max) | round(0) }}
 
-      # Ziel-Leistung des Wechselrichters in Watt.
-      # Drosseln nur, wenn nach geplanter Speicheraufnahme noch Ueberschuss bleibt und beide Speicher voll sind oder nicht mehr laden koennen.
-      # Entdrosseln, wenn ein Speicher unterhalb des Entdrossel-SoC liegt oder Bezug erkannt wird.
-      inverter_target_w: >-
-        {% set current = inverter_current_w | float(inverter_max_w_value) %}
+      # Entscheidung, ob der Wechselrichter gedrosselt werden soll.
+      # Die Bedingung prueft nur, ob nach geplanter Speicheraufnahme noch Ueberschuss bleibt und ob beide Speicher voll sind oder nicht mehr laden koennen.
+      # Wichtig: Diese Bedingung bestimmt nur, DASS gedrosselt wird. Die Hoehe der Drosselung wird nicht aus Hausverbrauch oder Ueberschuss berechnet, sondern kommt fest aus inverter_throttle_percent_value.
+      inverter_should_throttle: >-
         {% set no_storage_room = (not (storage1_can_charge | bool(false))) and (not (storage2_can_charge | bool(false))) %}
+        {{ not (inverter_unavailable | bool(false))
+           and (((storage1_full | bool(false)) and (storage2_full | bool(false))) or no_storage_room)
+           and (surplus_for_inverter_throttle_w | float(0)) > (zero_tolerance_w_value | float(40)) }}
+
+      # Entscheidung, ob der Wechselrichter wieder voll freigegeben werden soll.
+      # Freigabe bedeutet ab v17 direkt 100 Prozent statt schrittweiser Erhoehung.
+      # Dies passiert, wenn ein Speicher unter den konfigurierten Entdrossel-SoC faellt oder wenn echter Netzbezug oberhalb des Totbands erkannt wird.
+      inverter_should_unthrottle: >-
+        {{ not (inverter_unavailable | bool(false))
+           and ((storage1_soc | float(0)) < (inverter_unthrottle_soc_value | float(96))
+                or (storage2_soc | float(0)) < (inverter_unthrottle_soc_value | float(96))
+                or (uncontrolled_import_w | float(0)) > (zero_tolerance_w_value | float(40))) }}
+
+      # Solarman erwartet Prozent fuer *_active_power_regulation.
+      # Drosselung: fester konfigurierbarer Prozentwert, Default 50 Prozent.
+      # Entdrosselung: direkte Freigabe auf 100 Prozent.
+      # Keine Berechnung der Drosselhoehe aus Hausverbrauch, Netzeinspeisung oder Rampenschritten.
+      inverter_target_percent: >-
+        {% set current = inverter_current_percent | float(100) %}
+        {% set fixed_throttle = ([100, [0, inverter_throttle_percent_value | float(50)] | max] | min) %}
         {% if inverter_unavailable | bool(false) %}
           {{ current | round(0) }}
-        {% elif ((storage1_full | bool(false)) and (storage2_full | bool(false)) or no_storage_room) and (surplus_for_inverter_throttle_w | float(0)) > (zero_tolerance_w_value | float(40)) %}
-          {% set step = [inverter_ramp_w_value | float(100), surplus_for_inverter_throttle_w | float(0)] | min %}
-          {{ ([inverter_min_w_value | float(0), current - step] | max) | round(0) }}
-        {% elif (storage1_soc | float(0)) < (inverter_unthrottle_soc_value | float(96))
-              or (storage2_soc | float(0)) < (inverter_unthrottle_soc_value | float(96))
-              or (uncontrolled_import_w | float(0)) > (zero_tolerance_w_value | float(40)) %}
-          {{ ([inverter_max_w_value | float(2000), current + (inverter_ramp_w_value | float(100))] | min) | round(0) }}
+        {% elif inverter_should_throttle | bool(false) %}
+          {{ fixed_throttle | round(0) }}
+        {% elif inverter_should_unthrottle | bool(false) %}
+          100
         {% else %}
           {{ current | round(0) }}
         {% endif %}
 
-      # Solarman erwartet Prozent fuer *_active_power_regulation.
-      # Berechnung: Ziel-Watt / konfigurierte maximale Wechselrichterleistung * 100, begrenzt auf 0 bis 100.
-      inverter_target_percent: >-
-        {{ ([100, [0, (inverter_target_w | float(0)) / ([inverter_max_w_value | float(1), 1] | max) * 100] | max] | min) | round(0) }}
+      # Diagnose-Zielwert in Watt.
+      # Berechnung: Ziel-Prozent / 100 * konfigurierte maximale Wechselrichterleistung.
+      # Dieser Wert wird nicht mehr zur eigentlichen Solarman-Steuerung verwendet; geschrieben wird der Prozentwert oben.
+      inverter_target_w: >-
+        {{ (((inverter_target_percent | float(0)) / 100) * ([inverter_max_w_value | float(1), 1] | max)) | round(0) }}
 
   # choose: Setzt die Solarman-Wechselrichterbegrenzung nur dann neu, wenn der Ziel-Prozentwert relevant abweicht.
-  # Detail: Dieser Service-Block schreibt den berechneten Prozentwert in die Solarman-Number des Wechselrichters.
+  # Detail: Dieser Service-Block schreibt den Ziel-Prozentwert in die Solarman-Number des Wechselrichters.
   # Detail: Ein Schreibvorgang erfolgt nur bei erreichbarem Wechselrichter und nur bei mindestens 1 Prozentpunkt Unterschied.
   # Detail: Dadurch werden staendige identische Schreibbefehle vermieden und die Regelung bleibt dennoch reaktionsschnell.
   - choose:
