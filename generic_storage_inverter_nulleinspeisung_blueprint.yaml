@@ -1,5 +1,5 @@
 blueprint:
-  name: Zendure/Solarman Nulleinspeisung mit 2 Speichern - Geraeteauswahl v17
+  name: Zendure/Solarman Nulleinspeisung mit 2 Speichern - Geraeteauswahl v18
   description: >-
     Regelt zwei Zendure-Speicher ueber die offizielle Zendure Home Assistant
     Integration und einen ueber Solarman angebundenen Wechselrichter auf
@@ -86,7 +86,7 @@ blueprint:
       description: >-
         Maximale Wechselrichterleistung in Watt. Dieser Wert wird fuer die
         Diagnose-Umrechnung zwischen Solarman-Prozentwerten und Watt genutzt.
-        Die eigentliche Drosselung wird ab v17 direkt ueber den festen
+        Die eigentliche Drosselung wird seit v17 direkt ueber den festen
         Prozentwert "Wechselrichter - fester Drosselwert" gesetzt.
       default: 2000
       selector:
@@ -299,7 +299,7 @@ variables:
   # Detail: Die Marke kann in Trace-Ausgaben, Logbuch oder beim Vergleichen mehrerer Blueprint-Dateien helfen.
   # Detail: Es werden hier keine Geraete gelesen, keine Leistungen berechnet und keine Entitaeten veraendert.
   # Setzt nur die interne Versionskennung fuer Diagnose und Nachvollziehbarkeit; es wird keine Steuerentscheidung berechnet.
-  blueprint_version: "2026-05-26-zendure-device-v17-charge-source-fixed-inverter-throttle"
+  blueprint_version: "2026-06-02-zendure-device-v18-emergency-house-priority"
 
 mode: single
 max_exceeded: silent
@@ -1250,10 +1250,13 @@ action:
       # Detail: Die Gesamt-Notladeleistung wird aus Anzahl niedriger Speicher, Notladeleistung je Speicher, Hausnetz-Ladelimit und technischen Ladegrenzen gebildet.
       # Detail: Die Verteilung nutzt Gewichte aus Kapazitaet und fehlendem SoC bis zur Stoppschwelle, damit ein groesserer oder niedrigerer Speicher entsprechend mehr Ladeleistung erhaelt.
       # Detail: Gegenseitige Notladeunterstuetzung wird nur berechnet, wenn der abgebende Speicher oberhalb der konfigurierten Reserve liegt und einen hoeheren SoC als der annehmende Speicher hat.
-      # Detail: Reicht diese Reserve nicht, bleibt emergency_transfer_w 0 und die Notladung erfolgt aus dem Hausnetz.
-      # Berechnet Gesamt-Notladeleistung, SoC-/Kapazitaetsgewichte und ob die Energie vom anderen Speicher oder aus dem Hausnetz kommen soll.
+      # Detail: Vor jeder gegenseitigen Notladung wird aber zuerst die Hausversorgung reserviert. Nur die verbleibende technische Entladeleistung und die verbleibende aktuelle Ladeleistungsdifferenz des gesunden Speichers duerfen den anderen Speicher laden.
+      # Detail: Reicht diese Reserve oder Differenz nicht, bleibt emergency_transfer_w unter der Mindestleistung; dann erfolgt die Notladung aus dem Netz, waehrend der gesunde Speicher trotzdem die Hauslast uebernimmt.
+      # Berechnet Gesamt-Notladeleistung, Hausprioritaet, SoC-/Kapazitaetsgewichte und ob die Energie vom anderen Speicher oder aus dem Hausnetz kommen soll.
       # Notladeleistung gesamt, wenn ein oder beide Speicher unter dem Notlade-SoC liegen.
       # Berechnung: Anzahl niedriger Speicher * Notladeleistung, begrenzt durch Hausnetzlimit und Speicherlimits.
+      # Diese Groesse beschreibt nur die Netz-Notladung. Wenn gegenseitige Notladeunterstuetzung aktiv ist,
+      # wird die tatsaechliche Ladeleistung des annehmenden Speichers spaeter durch emergency_transfer_w ersetzt.
       emergency_total_w: >-
         {% set low_count = (1 if (storage1_needs_grid_charge | bool(false)) else 0) + (1 if (storage2_needs_grid_charge | bool(false)) else 0) %}
         {% set max_available = (storage1_max_charge_w | float(0) if (storage1_needs_grid_charge | bool(false)) else 0) + (storage2_max_charge_w | float(0) if (storage2_needs_grid_charge | bool(false)) else 0) %}
@@ -1283,19 +1286,148 @@ action:
           0
         {% endif %}
 
-      # Gegenseitige Notladeleistung, falls ein Speicher genug Reserve hat.
-      # Sonst bleibt der Wert 0 und die Notladung erfolgt aus dem Netz.
-      emergency_transfer_w: >-
-        {% if emergency_transfer_1_to_2 | bool(false) %}
-          {{ ([emergency_charge_w_value | float(300), storage1_max_discharge_w | float(0), storage2_max_charge_w | float(0)] | min) | round(0) }}
-        {% elif emergency_transfer_2_to_1 | bool(false) %}
-          {{ ([emergency_charge_w_value | float(300), storage2_max_discharge_w | float(0), storage1_max_charge_w | float(0)] | min) | round(0) }}
+      # Summe der Notladegewichte zur proportionalen Verteilung der Netz-Notladung.
+      emergency_weight_total: "{{ (emergency_weight_1 | float(0)) + (emergency_weight_2 | float(0)) }}"
+
+      # Hausleistung, die im Notlademodus Vorrang vor jeder gegenseitigen Speicherladung hat.
+      # Berechnung: gleicher Referenzwert wie bei Balance, also bereits laufende Netto-Speichereinspeisung ins Haus
+      # oder neu erkannter Netzbezug ohne Speicherbefehle. Dadurch wird die reine Hauslast von einer aktiven
+      # Notladung getrennt: ein gesunder Speicher soll die Hauslast decken, aber nicht automatisch die Netz-Notladung ersetzen.
+      emergency_house_required_w: >-
+        {% if (normal_mode | trim) == 'emergency' %}
+          {{ balance_required_house_output_w | float(0) | round(0) }}
         {% else %}
           0
         {% endif %}
 
-      # Summe der Notladegewichte zur proportionalen Verteilung.
-      emergency_weight_total: "{{ (emergency_weight_1 | float(0)) + (emergency_weight_2 | float(0)) }}"
+      # Entladekapazitaet von Speicher 1 fuer die reine Hausversorgung im Notlademodus.
+      # Ein Speicher, der selbst notgeladen wird, wird hier bewusst ausgeschlossen, auch wenn sein SoC bereits
+      # oberhalb der normalen Entlade-Reserve liegt. Damit laedt und entlaedt derselbe Speicher nicht gleichzeitig.
+      emergency_house_capacity_1_w: >-
+        {% if (normal_mode | trim) == 'emergency' and (storage1_can_discharge | bool(false)) and not (storage1_needs_grid_charge | bool(false)) %}
+          {{ storage1_max_discharge_w | float(0) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+      # Entladekapazitaet von Speicher 2 fuer die reine Hausversorgung im Notlademodus.
+      emergency_house_capacity_2_w: >-
+        {% if (normal_mode | trim) == 'emergency' and (storage2_can_discharge | bool(false)) and not (storage2_needs_grid_charge | bool(false)) %}
+          {{ storage2_max_discharge_w | float(0) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+      # Summe der im Notlademodus fuer Hausversorgung verfuegbaren gesunden Speicherleistung.
+      emergency_house_capacity_total_w: >-
+        {{ (emergency_house_capacity_1_w | float(0) + emergency_house_capacity_2_w | float(0)) | round(0) }}
+
+      # Hausversorgung, die gesunde Speicher im Notlademodus insgesamt uebernehmen koennen.
+      # Berechnung: min(Hausbedarf, Summe der gesunden Entladekapazitaeten). Wenn nur ein Speicher nicht im
+      # Nachlademodus ist, uebernimmt genau dieser Speicher 100 Prozent dieser Leistung bis zu *_inverse_max_power.
+      emergency_house_output_total_w: >-
+        {{ ([emergency_house_required_w | float(0), emergency_house_capacity_total_w | float(0)] | min) | round(0) }}
+
+      # Verteilgewicht fuer Speicher 1 bei Hausversorgung im Notlademodus.
+      # Im typischen Fehlerfall ist nur ein Speicher gesund; dieser bekommt damit allein das komplette Gewicht.
+      # Falls ausnahmsweise beide Speicher gesund entladen duerfen, wird nach aktuell verfuegbarer Kapazitaet
+      # und aktueller Ladeleistung gewichtet, damit die bestehende Balance-Strategie erhalten bleibt.
+      emergency_house_weight_1: >-
+        {% if (emergency_house_capacity_1_w | float(0)) > 0 %}
+          {% set available_total = [storage1_available_wh | float(0) + storage2_available_wh | float(0), 1] | max %}
+          {% set charge_total = (storage1_batt_charge_w | float(0)) + (storage2_batt_charge_w | float(0)) %}
+          {% set available_share = (storage1_available_wh | float(0)) / available_total %}
+          {% set charge_share = ((storage1_batt_charge_w | float(0)) / charge_total) if charge_total > 0 else available_share %}
+          {{ ([0.001, ((available_share * 1.0) + (charge_share * 2.0))] | max) | round(4) }}
+        {% else %}
+          0
+        {% endif %}
+
+      # Verteilgewicht fuer Speicher 2 bei Hausversorgung im Notlademodus.
+      emergency_house_weight_2: >-
+        {% if (emergency_house_capacity_2_w | float(0)) > 0 %}
+          {% set available_total = [storage1_available_wh | float(0) + storage2_available_wh | float(0), 1] | max %}
+          {% set charge_total = (storage1_batt_charge_w | float(0)) + (storage2_batt_charge_w | float(0)) %}
+          {% set available_share = (storage2_available_wh | float(0)) / available_total %}
+          {% set charge_share = ((storage2_batt_charge_w | float(0)) / charge_total) if charge_total > 0 else available_share %}
+          {{ ([0.001, ((available_share * 1.0) + (charge_share * 2.0))] | max) | round(4) }}
+        {% else %}
+          0
+        {% endif %}
+
+      # Summe der Hausversorgungsgewichte im Notlademodus.
+      emergency_house_weight_total: "{{ (emergency_house_weight_1 | float(0)) + (emergency_house_weight_2 | float(0)) }}"
+
+      # Konkrete Haus-Output-Leistung von Speicher 1 im Notlademodus.
+      # Berechnung: Hausbedarf * Gewicht Speicher 1 / Gewichtsumme, begrenzt auf die gesunde Entladekapazitaet.
+      emergency_storage1_house_output_w: >-
+        {% if (emergency_house_output_total_w | float(0)) > 0 and (emergency_house_capacity_1_w | float(0)) > 0 %}
+          {% set split = (emergency_house_output_total_w | float(0)) * (emergency_house_weight_1 | float(0)) / ([emergency_house_weight_total | float(0), 1] | max) %}
+          {{ ([emergency_house_capacity_1_w | float(0), split] | min) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+      # Konkrete Haus-Output-Leistung von Speicher 2 im Notlademodus.
+      emergency_storage2_house_output_w: >-
+        {% if (emergency_house_output_total_w | float(0)) > 0 and (emergency_house_capacity_2_w | float(0)) > 0 %}
+          {% set split = (emergency_house_output_total_w | float(0)) * (emergency_house_weight_2 | float(0)) / ([emergency_house_weight_total | float(0), 1] | max) %}
+          {{ ([emergency_house_capacity_2_w | float(0), split] | min) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+      # Hausversorgungsanteil des moeglichen Notlade-Quellspeichers.
+      # Diese Leistung wird zuerst reserviert. Nur die danach freie Entladeleistung und nur die danach verbleibende
+      # aktuelle Ladeleistung darf fuer gegenseitiges Nachladen verwendet werden.
+      emergency_source_house_output_w: >-
+        {% if emergency_transfer_1_to_2 | bool(false) %}
+          {{ emergency_storage1_house_output_w | float(0) | round(0) }}
+        {% elif emergency_transfer_2_to_1 | bool(false) %}
+          {{ emergency_storage2_house_output_w | float(0) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+      # Nach Hausversorgung verbleibende technische Entladeleistung des moeglichen Notlade-Quellspeichers.
+      emergency_source_transfer_headroom_w: >-
+        {% if emergency_transfer_1_to_2 | bool(false) %}
+          {{ ([0, (storage1_max_discharge_w | float(0)) - (emergency_source_house_output_w | float(0))] | max) | round(0) }}
+        {% elif emergency_transfer_2_to_1 | bool(false) %}
+          {{ ([0, (storage2_max_discharge_w | float(0)) - (emergency_source_house_output_w | float(0))] | max) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+      # Nach Hausversorgung verbleibende aktuelle Ladeleistungsdifferenz des moeglichen Notlade-Quellspeichers.
+      # Beispiel: Quelle laedt mit 1000 W und muss 200 W Hausverbrauch decken. Dann bleiben 800 W als reale
+      # Differenz; aus dieser Differenz kann unter Beruecksichtigung der Notladeleistung ein anderer Speicher geladen werden.
+      emergency_source_charge_surplus_after_house_w: >-
+        {% if emergency_transfer_1_to_2 | bool(false) %}
+          {{ ([0, (storage1_batt_charge_w | float(0)) - (emergency_source_house_output_w | float(0))] | max) | round(0) }}
+        {% elif emergency_transfer_2_to_1 | bool(false) %}
+          {{ ([0, (storage2_batt_charge_w | float(0)) - (emergency_source_house_output_w | float(0))] | max) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+      # Gegenseitige Notladeleistung nach Hausprioritaet.
+      # Berechnung: min(Notladeleistung, freie Entladeleistung nach Hausversorgung, Ladegrenze Ziel,
+      # aktuelle Ladeleistungsdifferenz nach Hausversorgung). Dadurch hat Hausverbrauch immer Vorrang:
+      # wenn der Hausverbrauch die Differenz aufbraucht, wird weniger oder nichts an den anderen Speicher abgegeben.
+      emergency_transfer_w: >-
+        {% if emergency_transfer_1_to_2 | bool(false) %}
+          {{ ([emergency_charge_w_value | float(300), emergency_source_transfer_headroom_w | float(0), storage2_max_charge_w | float(0), emergency_source_charge_surplus_after_house_w | float(0)] | min) | round(0) }}
+        {% elif emergency_transfer_2_to_1 | bool(false) %}
+          {{ ([emergency_charge_w_value | float(300), emergency_source_transfer_headroom_w | float(0), storage1_max_charge_w | float(0), emergency_source_charge_surplus_after_house_w | float(0)] | min) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+      # Aktiv ist gegenseitige Notladeunterstuetzung nur, wenn nach allen Hausprioritaets- und Leistungsgrenzen
+      # mindestens die konfigurierte Mindestleistung fuer Speicher-Ausgleich uebrig bleibt.
+      emergency_transfer_active: >-
+        {{ (emergency_transfer_w | float(0)) > 0 and (emergency_transfer_w | float(0)) >= (balance_transfer_min_w_value | float(50)) }}
 
   - variables:
       # Block: normale Lade- und Entladeverteilung ohne aktiven Speicher-zu-Speicher-Transfer berechnen.
@@ -1633,16 +1765,20 @@ action:
       # Block: endgueltige Ziel-Leistungen fuer beide Speicher berechnen.
       # Detail: In diesem Block werden aus allen Vorentscheidungen konkrete Watt-Zielwerte fuer input_limit und output_limit beider Speicher gebildet.
       # Detail: Die Prioritaet ist fest: zuerst Notladung, dann aktiver Speicher-zu-Speicher-Ausgleich, dann normale Ueberschussladung oder normale Entladung gegen Netzbezug.
+      # Detail: Bei Notladung erhaelt ein selbst nachladender Speicher keinen Output. Ein gesunder Speicher deckt zuerst die Hausversorgung; nur verbleibende Differenz wird fuer gegenseitige Notladung addiert.
       # Detail: Bei Balance erhaelt der annehmende Speicher die Transfer-Ladeleistung; der abgebende Speicher erhaelt als Output die Summe aus reservierter Hausversorgung und Transfer.
       # Detail: Bei Import nutzt der Block die zuvor berechnete kapazitaets- und ladequellenbasierte Entladeverteilung inklusive Dominanzfall und Zusatzbedarf oberhalb der Einzel-Speicher-Grenze.
       # Detail: Die harte can_discharge-Pruefung am Anfang der Output-Berechnung verhindert, dass ein Speicher am unteren SoC-Limit trotzdem aus einem anderen Zweig heraus entladen wird.
       # Entscheidet je Speicher zwischen Notladung, Balance-Transfer, Ueberschussladung, Entladung gegen Netzbezug oder 0 W.
       # Ziel-Ladeleistung Speicher 1.
-      # Reihenfolge: Notladung von Speicher 2, Netz-Notladung, Balance von Speicher 2, normale Ueberschussladung.
+      # Speicher 1 laedt bei aktiver gegenseitiger Notladung nur mit emergency_transfer_w.
+      # Wenn gegenseitige Notladung nicht aktiv ist oder wegen Hausprioritaet unter die Mindestleistung faellt,
+      # greift die normale Netz-Notladung. Dadurch wird der andere Speicher nicht blockiert: er kann parallel die
+      # Hausversorgung uebernehmen, waehrend Speicher 1 aus dem Netz nachlaedt.
       storage1_target_input_w: >-
-        {% if (normal_mode | trim) == 'emergency' and (emergency_transfer_2_to_1 | bool(false)) %}
+        {% if (normal_mode | trim) == 'emergency' and (emergency_transfer_2_to_1 | bool(false)) and (emergency_transfer_active | bool(false)) %}
           {{ emergency_transfer_w | float(0) | round(0) }}
-        {% elif (normal_mode | trim) == 'emergency' and (storage1_needs_grid_charge | bool(false)) and not (emergency_transfer_2_to_1 | bool(false)) %}
+        {% elif (normal_mode | trim) == 'emergency' and (storage1_needs_grid_charge | bool(false)) %}
           {% set split = (emergency_total_w | float(0)) * (emergency_weight_1 | float(0)) / ([emergency_weight_total | float(0), 1] | max) %}
           {{ ([storage1_max_charge_w | float(0), split] | min) | round(0) }}
         {% elif (normal_mode | trim) == 'balance' and (balance_direction | trim) == '2_to_1' %}
@@ -1654,11 +1790,11 @@ action:
         {% endif %}
 
       # Ziel-Ladeleistung Speicher 2.
-      # Gleiche Entscheidungslogik wie Speicher 1, mit umgekehrter Balance-Richtung.
+      # Gleiche Entscheidungslogik wie Speicher 1, mit umgekehrter Balance- und Notlade-Richtung.
       storage2_target_input_w: >-
-        {% if (normal_mode | trim) == 'emergency' and (emergency_transfer_1_to_2 | bool(false)) %}
+        {% if (normal_mode | trim) == 'emergency' and (emergency_transfer_1_to_2 | bool(false)) and (emergency_transfer_active | bool(false)) %}
           {{ emergency_transfer_w | float(0) | round(0) }}
-        {% elif (normal_mode | trim) == 'emergency' and (storage2_needs_grid_charge | bool(false)) and not (emergency_transfer_1_to_2 | bool(false)) %}
+        {% elif (normal_mode | trim) == 'emergency' and (storage2_needs_grid_charge | bool(false)) %}
           {% set split = (emergency_total_w | float(0)) * (emergency_weight_2 | float(0)) / ([emergency_weight_total | float(0), 1] | max) %}
           {{ ([storage2_max_charge_w | float(0), split] | min) | round(0) }}
         {% elif (normal_mode | trim) == 'balance' and (balance_direction | trim) == '1_to_2' %}
@@ -1670,12 +1806,18 @@ action:
         {% endif %}
 
       # Ziel-Entladeleistung Speicher 1.
-      # Speicher 1 entlaedt fuer Nottransfer, fuer Balance 1 -> 2 mit Hausversorgungsreserve plus Transfer oder anteilig gegen normalen Netzbezug.
+      # Speicher 1 entlaedt im Notlademodus zuerst fuer die Hausversorgung. Nur wenn Speicher 1 nach Hauslast
+      # noch freie Leistung und aktuelle Ladeleistungsdifferenz hat, wird emergency_transfer_w addiert.
+      # Wenn Speicher 1 selbst nachgeladen wird, bleibt sein Output 0, damit er nicht gleichzeitig laedt und entlaedt.
       storage1_target_output_w: >-
         {% if not (storage1_can_discharge | bool(false)) %}
           0
-        {% elif (normal_mode | trim) == 'emergency' and (emergency_transfer_1_to_2 | bool(false)) %}
-          {{ emergency_transfer_w | float(0) | round(0) }}
+        {% elif (normal_mode | trim) == 'emergency' and (storage1_needs_grid_charge | bool(false)) %}
+          0
+        {% elif (normal_mode | trim) == 'emergency' and (emergency_transfer_1_to_2 | bool(false)) and (emergency_transfer_active | bool(false)) %}
+          {{ ([storage1_max_discharge_w | float(0), (emergency_storage1_house_output_w | float(0)) + (emergency_transfer_w | float(0))] | min) | round(0) }}
+        {% elif (normal_mode | trim) == 'emergency' %}
+          {{ emergency_storage1_house_output_w | float(0) | round(0) }}
         {% elif (normal_mode | trim) == 'balance' and (balance_direction | trim) == '1_to_2' %}
           {{ ([storage1_max_discharge_w | float(0), balance_source_total_output_w | float(0)] | min) | round(0) }}
         {% elif (normal_mode | trim) == 'import' %}
@@ -1685,12 +1827,17 @@ action:
         {% endif %}
 
       # Ziel-Entladeleistung Speicher 2.
-      # Speicher 2 entlaedt fuer Nottransfer, fuer Balance 2 -> 1 mit Hausversorgungsreserve plus Transfer oder anteilig gegen normalen Netzbezug.
+      # Gleiche Hausprioritaetslogik wie bei Speicher 1: Hausverbrauch zuerst, danach nur der verbleibende
+      # Differenzanteil fuer gegenseitige Notladung. Ein selbst nachladender Speicher gibt keinen Output ab.
       storage2_target_output_w: >-
         {% if not (storage2_can_discharge | bool(false)) %}
           0
-        {% elif (normal_mode | trim) == 'emergency' and (emergency_transfer_2_to_1 | bool(false)) %}
-          {{ emergency_transfer_w | float(0) | round(0) }}
+        {% elif (normal_mode | trim) == 'emergency' and (storage2_needs_grid_charge | bool(false)) %}
+          0
+        {% elif (normal_mode | trim) == 'emergency' and (emergency_transfer_2_to_1 | bool(false)) and (emergency_transfer_active | bool(false)) %}
+          {{ ([storage2_max_discharge_w | float(0), (emergency_storage2_house_output_w | float(0)) + (emergency_transfer_w | float(0))] | min) | round(0) }}
+        {% elif (normal_mode | trim) == 'emergency' %}
+          {{ emergency_storage2_house_output_w | float(0) | round(0) }}
         {% elif (normal_mode | trim) == 'balance' and (balance_direction | trim) == '2_to_1' %}
           {{ ([storage2_max_discharge_w | float(0), balance_source_total_output_w | float(0)] | min) | round(0) }}
         {% elif (normal_mode | trim) == 'import' %}
@@ -1698,6 +1845,7 @@ action:
         {% else %}
           0
         {% endif %}
+
 
   - variables:
       # Block: Zielmodi, geplante Netzreaktion und Solarman-Wechselrichterbegrenzung berechnen.
@@ -1760,7 +1908,7 @@ action:
            and (surplus_for_inverter_throttle_w | float(0)) > (zero_tolerance_w_value | float(40)) }}
 
       # Entscheidung, ob der Wechselrichter wieder voll freigegeben werden soll.
-      # Freigabe bedeutet ab v17 direkt 100 Prozent statt schrittweiser Erhoehung.
+      # Freigabe bedeutet seit v17 direkt 100 Prozent statt schrittweiser Erhoehung.
       # Dies passiert, wenn ein Speicher unter den konfigurierten Entdrossel-SoC faellt oder wenn echter Netzbezug oberhalb des Totbands erkannt wird.
       inverter_should_unthrottle: >-
         {{ not (inverter_unavailable | bool(false))
