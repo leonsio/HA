@@ -1,7 +1,7 @@
 # Zendure/Solarman Nulleinspeisung mit zwei Speichern
 
-README-Stand: v15 Dokumentation  
-Blueprint-Logik: v14, funktional unverändert
+README-Stand: v18 Dokumentation  
+Blueprint-Logik: v18
 
 Diese README beschreibt die wesentlichen Eingabeparameter, die automatisch erkannten Zendure-/Solarman-/Shelly-Entitäten und die Regeln der Lade-, Entlade- und Speicher-zu-Speicher-Strategie.
 
@@ -21,7 +21,7 @@ Der Regelzyklus arbeitet in dieser Reihenfolge:
 4. Netzleistung, Speicherzustände, Kapazitäten und technische Leistungsgrenzen einlesen.
 5. Betriebszustand bestimmen: Notladung, Speicher-zu-Speicher-Ausgleich, Überschussladung, Entladung gegen Netzbezug oder Leerlauf.
 6. Zielwerte für beide Speicher berechnen.
-7. Solarman-Wechselrichterleistung in Prozent berechnen.
+7. Solarman-Wechselrichterleistung als festen Ziel-Prozentwert berechnen.
 8. Neue Werte nur schreiben, wenn sie sich relevant vom aktuellen Zustand unterscheiden.
 
 Wichtig: Die Speicher werden über Zendure-AC-Modi gesteuert. Laden verwendet fest den AC-Modus `input`, Entladen verwendet fest den AC-Modus `output`. Der Off-Grid-Port wird mit `off` ausgeschaltet und mit `normal` eingeschaltet.
@@ -43,13 +43,24 @@ Für beide Speicher müssen physische Zendure-Geräte aus der Integration `zendu
 | optionale Batterieentladeleistung | `*_pack_input_power`, `*_battery_output_power`, `*_discharge_power` |
 | Gesamtkapazität | `*_total_kwh` |
 | verfügbare Energie | `*_available_kwh` |
+| Off-Grid-Ladeleistung | `*_grid_off_power`, `*_gridoffpower`, `*_off_grid_power`, `*_offgrid_power` |
+| Solar-Ladeleistung | `*_solar_input_power`, `*_solarinputpower`, `*_pv_input_power` |
 | AC-Modus | `*_ac_mode`, `*_acmode` |
 | AC-Eingangsgrenze | `*_input_limit`, `*_ac_input_limit`, `*_inputlimit` |
 | AC-Ausgangsgrenze | `*_output_limit`, `*_ac_output_limit`, `*_outputlimit` |
 | maximale Entlade-/Transferleistung | `*_inverse_max_power`, `*_inversemaxpower` |
 | Off-Grid-Port | `*_grid_off_mode`, `*_off_grid_mode`, `*_offgrid_mode` oder passender Switch |
 
-Die Gesamtkapazität wird aus `*_total_kwh` gelesen. Die verfügbare Energie wird aus `*_available_kwh` gelesen. Die maximale Entlade- und Transferleistung wird aus `*_inverse_max_power` gelesen und zusätzlich durch das `max`-Attribut der Zendure-`output_limit`-Number begrenzt, falls dieses kleiner ist.
+Die Gesamtkapazität wird aus `*_total_kwh` gelesen. Die verfügbare Energie wird aus `*_available_kwh` gelesen. Die aktuelle Ladeleistung für Entlade- und Transferentscheidungen wird aus den Ladequellen `*_grid_off_power` und `*_solar_input_power` gebildet. `*_grid_off_power` wird dabei absolut genommen, weil Zendure diesen Wert je nach Richtung auch negativ liefern kann. Als Schutz gegen Doppelzählung nutzt der Blueprint für die Regelung den größeren Wert aus bisheriger Pack-Ladeleistung und Summe aus Off-Grid- plus Solar-Ladeleistung:
+
+```text
+charge_for_distribution = max(
+  output_pack_power,
+  abs(grid_off_power) + max(0, solar_input_power)
+)
+```
+
+Die maximale Entlade- und Transferleistung wird aus `*_inverse_max_power` gelesen und zusätzlich durch das `max`-Attribut der Zendure-`output_limit`-Number begrenzt, falls dieses kleiner ist.
 
 ### Netzanschluss
 
@@ -67,9 +78,11 @@ Erwartete Vorzeichenlogik nach optionaler Invertierung:
 
 ### Wechselrichter
 
-Für den Wechselrichter wird ein Solarman-Gerät ausgewählt. Darin wird die Number-Entität `*_active_power_regulation` gesucht. Diese Entität wird mit einem Prozentwert von 0 bis 100 beschrieben.
+Für den Wechselrichter wird ein Solarman-Gerät ausgewählt. Darin wird die Number-Entität `*_active_power_regulation` gesucht. Diese Entität wird direkt mit einem Prozentwert von 0 bis 100 beschrieben.
 
-Beispiel: Bei `inverter_max_w = 2000 W` entspricht ein Solarman-Wert von 50 Prozent einer Wechselrichterleistung von 1000 W.
+Seit v17 wird die Drosselung nicht mehr aus Hausverbrauch, Restüberschuss oder Rampenschritten berechnet. Wenn die Drosselbedingung erfüllt ist, schreibt der Blueprint den festen konfigurierten Prozentwert `Wechselrichter - fester Drosselwert`. Default: 50 %.
+
+Beispiel: Bei `inverter_max_w = 2000 W` entspricht ein Solarman-Wert von 50 Prozent rechnerisch einer Wechselrichterleistung von 1000 W. Diese Watt-Umrechnung dient nur noch zur Diagnose; an Solarman wird der Prozentwert geschrieben.
 
 ---
 
@@ -106,10 +119,9 @@ Beispiel: Bei `inverter_max_w = 2000 W` entspricht ein Solarman-Wert von 50 Proz
 
 | Parameter | Bedeutung |
 |---|---|
-| `Wechselrichter - maximale AC-Leistung` | Basis für die Umrechnung von Watt in Prozent für Solarman `*_active_power_regulation`. |
-| `Wechselrichter - minimale erlaubte Leistung` | Untere Grenze, bis zu der der Wechselrichter gedrosselt werden darf. |
-| `Wechselrichter - Drossel-/Entdrossel-Schritt je Regelzyklus` | Schrittweite, mit der der Wechselrichter pro Sekundenzyklus reduziert oder wieder freigegeben wird. |
-| `Wechselrichter wieder entdrosseln unter SoC` | Fällt mindestens ein Speicher unter diesen SoC, wird der Wechselrichter wieder schrittweise entdrosselt. |
+| `Wechselrichter - maximale AC-Leistung` | Wird für Diagnose und Watt-Anzeige aus dem Solarman-Prozentwert genutzt. Die Solarman-Steuerung selbst schreibt Prozentwerte. |
+| `Wechselrichter - fester Drosselwert` | Prozentwert, auf den `*_active_power_regulation` gesetzt wird, wenn Drosselung nötig ist. Default: 50 %. |
+| `Wechselrichter wieder entdrosseln unter SoC` | Fällt mindestens ein Speicher unter diesen SoC oder wird Netzbezug erkannt, wird der Wechselrichter direkt wieder auf 100 % freigegeben. |
 
 ---
 
@@ -297,24 +309,58 @@ Bei 1600 W Bedarf können beide Speicher jeweils bis zu 800 W liefern, sofern be
 
 ### Verteilung bei nicht vollen Speichern
 
-Wenn nicht beide Speicher voll sind, wird bis zur größten einzelnen Entladegrenze eine gewichtete Verteilung verwendet. Dabei wird der Speicher stärker genutzt, der mehr verfügbare Energie im Verhältnis zur Gesamtkapazität hat und aktuell stärker geladen wird.
+Wenn nicht beide Speicher voll sind, wird bis zur größten einzelnen Entladegrenze eine gewichtete Verteilung verwendet. Dabei werden zwei Größen kombiniert:
 
-Vereinfacht:
+1. verfügbare Energie aus `*_available_kwh`
+2. aktuelle Ladeleistung aus Off-Grid und Solar
+
+Die Ladeleistung wird so gebildet:
 
 ```text
-Basisenergie = max(
-  available_kwh * 1000,
-  total_kwh * 1000 * max(SoC - reserve_soc, 0) / 100
+charge_for_distribution = max(
+  output_pack_power,
+  abs(grid_off_power) + max(0, solar_input_power)
 )
-
-Verfügbarkeitsfaktor = 0.5 + available_kwh / total_kwh
-
-Ladeleistungsfaktor = 1 + min(aktuelle Batterieladeleistung, Referenzlimit) / Referenzlimit
-
-Entladegewicht = Basisenergie * Verfügbarkeitsfaktor * Ladeleistungsfaktor
 ```
 
-Damit wird ein Speicher, der gerade deutlich stärker geladen wird oder mehr verfügbare Kapazität hat, stärker zur Hausversorgung herangezogen. So sollen unterschiedliche Kapazitäten besser ausgeglichen werden.
+Dadurch wird ein Speicher auch dann korrekt bewertet, wenn er nur über Off-Grid, nur über Solar oder gleichzeitig über beide Quellen geladen wird.
+
+Vereinfacht wird für die Entladeverteilung gerechnet:
+
+```text
+available_share = storage_available_wh / available_wh_sum
+charge_share = charge_for_distribution / charge_for_distribution_sum
+availability_factor = 0.5 + available_kwh / total_kwh
+
+Entladegewicht = (available_share + 2 * charge_share) * availability_factor
+```
+
+Die Ladeleistung wird bewusst stärker gewichtet als die reine verfügbare Energie. Dadurch wird der Speicher, der gerade deutlich mehr Energie bekommt, stärker zur Hausversorgung herangezogen. Hat ein Speicher mehr verfügbare Energie und zugleich die höhere Ladeleistung, steigt sein Anteil entsprechend deutlich.
+
+### Dominanzfall bei überproportional hoher Ladeleistung
+
+Wenn ein Speicher eine deutlich überproportionale Ladeleistung hat, soll er die Hausversorgung allein übernehmen, statt nur anteilig stärker beteiligt zu werden. Der Blueprint bewertet eine Ladeleistung als dominant, wenn sie mindestens doppelt so hoch ist wie die Ladeleistung des anderen Speichers und zugleich die Hausversorgung bis zur eigenen `*_inverse_max_power`-Grenze abdecken kann.
+
+Dann gilt:
+
+```text
+Speicher mit dominanter Ladeleistung liefert allein
+bis maximal eigene inverse_max_power
+```
+
+Übersteigt der Hausbedarf diese Grenze, wird nur der Restbedarf auf den anderen Speicher verteilt.
+
+Beispiel:
+
+```text
+Hausbedarf = 1200 W
+Speicher 1 charge_for_distribution = 1500 W
+Speicher 1 inverse_max_power = 800 W
+Speicher 2 charge_for_distribution = 200 W
+
+Speicher 1 übernimmt 800 W
+Speicher 2 hilft mit 400 W aus
+```
 
 Wenn der Bedarf oberhalb der größten einzelnen Speichergrenze liegt, wird der zusätzliche Bedarf auf die noch freien Entladekapazitäten beider Speicher verteilt. Dadurch können beide Speicher parallel bis zu ihren jeweiligen `*_inverse_max_power`-Grenzen liefern.
 
@@ -408,20 +454,41 @@ Der Transfer wird also nicht als sofortiger Grund zur Wechselrichterdrosselung b
 
 ### Regel 2: Abgebender Speicher ist voll
 
-Wenn ein Speicher voll ist, wird sein verfügbarer Überschuss bevorzugt an den anderen Speicher übergeben, sofern der andere Speicher niedrigeren SoC hat und laden kann.
+Wenn genau ein Speicher voll ist und der andere Speicher noch laden kann, wird zuerst geprüft, ob der volle Speicher mehr aktuelle Ladeleistung hat, als für die Hausversorgung reserviert werden muss. Die Ladeleistung wird dabei wie oben aus `output_pack_power`, `*_grid_off_power` und `*_solar_input_power` gebildet.
 
-Für volle Speicher wird nicht `surplus_exchange_threshold_w` abgezogen. Stattdessen gilt nur das Totband um die Nulleinspeisung.
+Wenn diese Bedingung erfüllt ist, übernimmt der volle Speicher die komplette Hausversorgung bis zu seiner `*_inverse_max_power`-Grenze. Erst der darüber verbleibende Überschuss darf den anderen Speicher über das Hausnetz laden.
 
 Vereinfacht:
 
 ```text
+source_surplus_before_threshold = max(
+  0,
+  charge_for_distribution_full_storage - reserved_house_output
+)
+
 full_surplus_available = max(
-  quellbezogener Überschuss des vollen Speichers,
+  source_surplus_before_threshold,
   realer berechneter Netzüberschuss
 ) - zero_tolerance_w
 ```
 
-Dadurch kann auch dann ein Transfer entstehen, wenn ein voller Speicher selbst keine klare Batterieladeleistung mehr meldet, aber am Netzanschluss weiterhin Überschuss sichtbar ist.
+Für volle Speicher wird nicht `surplus_exchange_threshold_w` abgezogen. Stattdessen gilt nur das Totband um die Nulleinspeisung. Der Transfer ist zusätzlich durch die freie Entladeleistung nach Hausversorgung und durch das input_limit des annehmenden Speichers begrenzt.
+
+Beispiel:
+
+```text
+Speicher 1 ist voll
+Speicher 2 ist nicht voll und hat niedrigeren SoC
+reservierte Hausversorgung = 300 W
+Speicher 1 charge_for_distribution = 1200 W
+zero_tolerance_w = 40 W
+
+Speicher 1 übernimmt zuerst 300 W Hausversorgung
+verbleibender Vollspeicher-Überschuss = 1200 W - 300 W - 40 W = 860 W
+Speicher 2 darf bis zu 860 W laden, begrenzt durch sein input_limit und die freie output-Leistung von Speicher 1
+```
+
+Dadurch wird verhindert, dass der volle Speicher weiter unnötig Überschuss erzeugt, während der zweite Speicher noch Energie aufnehmen könnte.
 
 ### Finale Transferbegrenzung
 
@@ -478,6 +545,23 @@ Notladegewicht = Gesamtkapazität in Wh * fehlende Prozentpunkte bis grid_charge
 
 Ein größerer oder niedrigerer Speicher bekommt dadurch mehr Notladeleistung.
 
+### Hausversorgung während der Notladung
+
+Ab v18 wird ein gesunder Speicher im Notlademodus nicht mehr blockiert. Wenn ein Speicher unterhalb der Notladegrenze liegt oder seine Netz-Notladung bis `grid_charge_stop_soc` fortsetzt, wird der andere Speicher getrennt bewertet:
+
+```text
+niedriger Speicher = darf laden, aber nicht gleichzeitig entladen
+gesunder Speicher = deckt zuerst die Hausversorgung bis zu *_inverse_max_power
+```
+
+Die Hausversorgung wird dabei aus der bereinigten Netzreferenz abgeleitet:
+
+```text
+emergency_house_required = balance_required_house_output
+```
+
+Das bedeutet praktisch: Lädt Speicher 1 aus dem Netz nach und Speicher 2 hat genug Energie bzw. aktuelle Erzeugung, dann bekommt Speicher 1 weiterhin seine Notladeleistung, aber Speicher 2 übernimmt den Hausverbrauch bis zu seiner Entladegrenze. Dadurch wird nicht mehr alles in die Batterie geladen, während das Haus aus dem Netz versorgt wird.
+
 ### Gegenseitige Notladeunterstützung
 
 Ein Speicher darf den anderen bei Notladung nur versorgen, wenn:
@@ -490,33 +574,67 @@ abgebender Speicher SoC >= grid_charge_soc + mutual_emergency_soc_margin
 abgebender Speicher hat höheren SoC als der annehmende Speicher
 ```
 
-Wenn diese Bedingungen nicht erfüllt sind, erfolgt die Notladung aus dem Hausnetz.
+Zusätzlich gilt ab v18 eine harte Hauspriorität. Der gesunde Speicher muss zuerst die Hausversorgung übernehmen. Nur die danach verbleibende technische Leistung und nur die verbleibende aktuelle Ladeleistungsdifferenz dürfen an den anderen Speicher abgegeben werden.
 
-Die gegenseitige Notladeleistung ist begrenzt durch:
+Die gegenseitige Notladeleistung wird daher berechnet als:
 
 ```text
-min(
+emergency_house_output = min(
+  Hausversorgung,
+  inverse_max_power des gesunden Speichers
+)
+
+emergency_transfer = min(
   emergency_charge_w,
-  Entladegrenze des abgebenden Speichers,
-  Ladegrenze des annehmenden Speichers
+  inverse_max_power des gesunden Speichers - emergency_house_output,
+  input_limit des annehmenden Speichers,
+  aktuelle Ladeleistung des gesunden Speichers - emergency_house_output
 )
 ```
+
+Wenn `emergency_transfer` unter `Mindestleistung für Speicher-Ausgleich` fällt, wird keine gegenseitige Notladeunterstützung gestartet. Dann lädt der niedrige Speicher aus dem Netz, während der gesunde Speicher trotzdem die Hausversorgung übernimmt.
+
+Beispiel:
+
+```text
+Hausverbrauch = 200 W
+Speicher 1 braucht Notladung
+Speicher 2 lädt aktuell mit 1000 W
+Speicher 2 inverse_max_power = 800 W
+Notladeleistung = 300 W
+
+Speicher 2 reserviert zuerst 200 W für das Haus
+verbleibende Differenz = 1000 W - 200 W = 800 W
+verbleibender technischer Headroom = 800 W - 200 W = 600 W
+Speicher 2 gibt 300 W an Speicher 1 ab
+Speicher 2 output_limit = 200 W Haus + 300 W Transfer = 500 W
+Speicher 1 input_limit = 300 W
+```
+
+Wenn der Hausverbrauch höher ist, wird der Transfer reduziert:
+
+```text
+Hausverbrauch = 700 W
+Speicher 2 inverse_max_power = 800 W
+Speicher 2 lädt aktuell mit 1000 W
+Notladeleistung = 300 W
+
+Speicher 2 reserviert 700 W für das Haus
+verbleibender technischer Headroom = 100 W
+Speicher 2 kann nur 100 W an Speicher 1 abgeben
+```
+
+Hausverbrauch hat also immer Vorrang. Nur die Differenz wird für gegenseitiges Nachladen verwendet.
 
 ---
 
 ## 11. Wechselrichter-Drosselung über Solarman
 
-Der Wechselrichter wird über die Solarman-Entität `*_active_power_regulation` gesteuert. Der Blueprint berechnet zuerst ein Ziel in Watt und wandelt dieses danach in Prozent um:
+Der Wechselrichter wird über die Solarman-Entität `*_active_power_regulation` gesteuert. Diese Entität erwartet einen Prozentwert. Seit v17 berechnet der Blueprint die Drosselhöhe nicht mehr aus Hausverbrauch, aktuellem Restüberschuss oder einem Rampenschritt. Stattdessen wird bei Drosselbedarf direkt ein konfigurierbarer fester Prozentwert geschrieben.
 
-```text
-active_power_regulation_percent = inverter_target_w / inverter_max_w * 100
-```
+### Drosselbedingung
 
-### Drosseln
-
-Gedrosselt wird nur, wenn nach geplanter Speicheraufnahme noch Überschuss übrig bleibt und beide Speicher voll sind oder beide Speicher nicht mehr laden können.
-
-Dabei wird berücksichtigt, ob Überschuss bewusst in einen Speicher fließen soll:
+Gedrosselt wird nur, wenn nach geplanter Speicheraufnahme noch Überschuss übrig bleibt und beide Speicher voll sind oder beide Speicher nicht mehr laden können. Dabei wird weiterhin berücksichtigt, ob Überschuss bewusst in einen Speicher fließen soll:
 
 ```text
 surplus_for_inverter_throttle_w = max(
@@ -525,20 +643,21 @@ surplus_for_inverter_throttle_w = max(
 )
 ```
 
-Wenn ein Speicher-zu-Speicher-Transfer geplant ist, zählt die geplante Aufnahme des annehmenden Speichers als bewusste Überschussverwertung. Der Wechselrichter wird deshalb nicht sofort gedrosselt, solange der andere Speicher den Überschuss aufnehmen soll.
+Wenn ein Speicher-zu-Speicher-Transfer geplant ist, zählt die geplante Aufnahme des annehmenden Speichers als bewusste Überschussverwertung. Der Wechselrichter wird deshalb nicht gedrosselt, solange der andere Speicher den Überschuss aufnehmen soll.
 
-Die Drosselung erfolgt schrittweise:
+### Drosselhöhe
+
+Ist die Drosselbedingung erfüllt, wird der Solarman-Parameter direkt auf den konfigurierten festen Prozentwert gesetzt:
 
 ```text
-inverter_target_w = max(
-  inverter_min_w,
-  inverter_current_w - min(inverter_ramp_w, surplus_for_inverter_throttle_w)
-)
+inverter_target_percent = inverter_throttle_percent
 ```
+
+Default für `inverter_throttle_percent` ist 50 %. Bei einem Wechselrichter mit 2000 W Maximalleistung entspricht das rechnerisch 1000 W, geschrieben wird aber der Prozentwert `50`.
 
 ### Entdrosseln
 
-Der Wechselrichter wird wieder schrittweise freigegeben, wenn mindestens eine der Bedingungen erfüllt ist:
+Der Wechselrichter wird direkt wieder auf 100 % freigegeben, wenn mindestens eine der Bedingungen erfüllt ist:
 
 ```text
 Speicher 1 SoC < inverter_unthrottle_soc
@@ -547,8 +666,6 @@ Speicher 2 SoC < inverter_unthrottle_soc
 oder
 uncontrolled_import_w > zero_tolerance_w
 ```
-
-Dann steigt der Zielwert pro Regelzyklus maximal um `inverter_ramp_w`, aber nicht über `inverter_max_w`.
 
 Wenn Solarman nicht erreichbar ist, wird kein neuer Prozentwert geschrieben. Stattdessen greift die Off-Grid-Sicherheitslogik.
 
@@ -586,7 +703,7 @@ Werte werden nur geschrieben, wenn die Differenz zum aktuellen Wert mindestens `
 - Beide Speicher dürfen entladen.
 - Normale Hausversorgung wird gleichmäßig verteilt.
 - Wenn weiterhin Überschuss entsteht und ein Speicher doch noch annehmen kann, wird dieser Überschuss verwendet.
-- Wenn kein Speicher mehr laden kann, wird der Wechselrichter über Solarman schrittweise gedrosselt.
+- Wenn kein Speicher mehr laden kann, wird der Wechselrichter über Solarman direkt auf den konfigurierten festen Drosselwert gesetzt.
 
 ### Zustand B: Speicher 1 ist leer bzw. an der unteren Reserve, Speicher 2 hat genug Energie
 
@@ -613,6 +730,14 @@ Werte werden nur geschrieben, wenn die Differenz zum aktuellen Wert mindestens `
 - Keine neue Lade- oder Drosselaktion.
 - Kleine Schwankungen werden ignoriert.
 - Bestehende Werte werden nur geändert, wenn die Differenz mindestens `min_change_w` erreicht.
+
+### Zustand F: Ein Speicher befindet sich im Netz-Nachlademodus, der andere Speicher erzeugt genug Leistung
+
+- Der nachladende Speicher bekommt keinen Output-Befehl, damit er nicht gleichzeitig lädt und entlädt.
+- Der andere Speicher übernimmt die Hausversorgung bis zu seiner `*_inverse_max_power`-Grenze.
+- Danach wird geprüft, ob gegenseitige Notladeunterstützung nach SoC-Reserve, SoC-Richtung, Ladegrenze und aktueller Ladeleistungsdifferenz erlaubt ist.
+- Nur der Rest nach Hausversorgung wird an den nachladenden Speicher abgegeben.
+- Wenn dieser Rest nicht reicht oder unter der Mindestleistung liegt, lädt der niedrige Speicher aus dem Netz; der gesunde Speicher deckt trotzdem weiter das Haus.
 
 ---
 
@@ -662,6 +787,18 @@ balance_transfer = min(
   source_surplus_cap
 )
 
-Wechselrichter-Prozentwert:
-active_power_regulation = inverter_target_w / inverter_max_w * 100
+Hauspriorität bei Notladung:
+emergency_house_output = min(Hausversorgung, inverse_max_power des gesunden Speichers)
+
+Gegenseitige Notladeunterstützung nach Hauspriorität:
+emergency_transfer = min(
+  emergency_charge_w,
+  source_max_discharge - emergency_house_output,
+  target_max_charge,
+  source_battery_charge_power - emergency_house_output
+)
+
+Wechselrichter-Drosselwert:
+active_power_regulation = inverter_throttle_percent, wenn Drosselung nötig ist
+active_power_regulation = 100, wenn Entdrosselung nötig ist
 ```
