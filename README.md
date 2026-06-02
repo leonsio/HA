@@ -1,7 +1,7 @@
 # Zendure/Solarman Nulleinspeisung mit zwei Speichern
 
-README-Stand: v17 Dokumentation  
-Blueprint-Logik: v17
+README-Stand: v18 Dokumentation  
+Blueprint-Logik: v18
 
 Diese README beschreibt die wesentlichen Eingabeparameter, die automatisch erkannten Zendure-/Solarman-/Shelly-Entitäten und die Regeln der Lade-, Entlade- und Speicher-zu-Speicher-Strategie.
 
@@ -80,7 +80,7 @@ Erwartete Vorzeichenlogik nach optionaler Invertierung:
 
 Für den Wechselrichter wird ein Solarman-Gerät ausgewählt. Darin wird die Number-Entität `*_active_power_regulation` gesucht. Diese Entität wird direkt mit einem Prozentwert von 0 bis 100 beschrieben.
 
-Ab v17 wird die Drosselung nicht mehr aus Hausverbrauch, Restüberschuss oder Rampenschritten berechnet. Wenn die Drosselbedingung erfüllt ist, schreibt der Blueprint den festen konfigurierten Prozentwert `Wechselrichter - fester Drosselwert`. Default: 50 %.
+Seit v17 wird die Drosselung nicht mehr aus Hausverbrauch, Restüberschuss oder Rampenschritten berechnet. Wenn die Drosselbedingung erfüllt ist, schreibt der Blueprint den festen konfigurierten Prozentwert `Wechselrichter - fester Drosselwert`. Default: 50 %.
 
 Beispiel: Bei `inverter_max_w = 2000 W` entspricht ein Solarman-Wert von 50 Prozent rechnerisch einer Wechselrichterleistung von 1000 W. Diese Watt-Umrechnung dient nur noch zur Diagnose; an Solarman wird der Prozentwert geschrieben.
 
@@ -545,6 +545,23 @@ Notladegewicht = Gesamtkapazität in Wh * fehlende Prozentpunkte bis grid_charge
 
 Ein größerer oder niedrigerer Speicher bekommt dadurch mehr Notladeleistung.
 
+### Hausversorgung während der Notladung
+
+Ab v18 wird ein gesunder Speicher im Notlademodus nicht mehr blockiert. Wenn ein Speicher unterhalb der Notladegrenze liegt oder seine Netz-Notladung bis `grid_charge_stop_soc` fortsetzt, wird der andere Speicher getrennt bewertet:
+
+```text
+niedriger Speicher = darf laden, aber nicht gleichzeitig entladen
+gesunder Speicher = deckt zuerst die Hausversorgung bis zu *_inverse_max_power
+```
+
+Die Hausversorgung wird dabei aus der bereinigten Netzreferenz abgeleitet:
+
+```text
+emergency_house_required = balance_required_house_output
+```
+
+Das bedeutet praktisch: Lädt Speicher 1 aus dem Netz nach und Speicher 2 hat genug Energie bzw. aktuelle Erzeugung, dann bekommt Speicher 1 weiterhin seine Notladeleistung, aber Speicher 2 übernimmt den Hausverbrauch bis zu seiner Entladegrenze. Dadurch wird nicht mehr alles in die Batterie geladen, während das Haus aus dem Netz versorgt wird.
+
 ### Gegenseitige Notladeunterstützung
 
 Ein Speicher darf den anderen bei Notladung nur versorgen, wenn:
@@ -557,23 +574,63 @@ abgebender Speicher SoC >= grid_charge_soc + mutual_emergency_soc_margin
 abgebender Speicher hat höheren SoC als der annehmende Speicher
 ```
 
-Wenn diese Bedingungen nicht erfüllt sind, erfolgt die Notladung aus dem Hausnetz.
+Zusätzlich gilt ab v18 eine harte Hauspriorität. Der gesunde Speicher muss zuerst die Hausversorgung übernehmen. Nur die danach verbleibende technische Leistung und nur die verbleibende aktuelle Ladeleistungsdifferenz dürfen an den anderen Speicher abgegeben werden.
 
-Die gegenseitige Notladeleistung ist begrenzt durch:
+Die gegenseitige Notladeleistung wird daher berechnet als:
 
 ```text
-min(
+emergency_house_output = min(
+  Hausversorgung,
+  inverse_max_power des gesunden Speichers
+)
+
+emergency_transfer = min(
   emergency_charge_w,
-  Entladegrenze des abgebenden Speichers,
-  Ladegrenze des annehmenden Speichers
+  inverse_max_power des gesunden Speichers - emergency_house_output,
+  input_limit des annehmenden Speichers,
+  aktuelle Ladeleistung des gesunden Speichers - emergency_house_output
 )
 ```
+
+Wenn `emergency_transfer` unter `Mindestleistung für Speicher-Ausgleich` fällt, wird keine gegenseitige Notladeunterstützung gestartet. Dann lädt der niedrige Speicher aus dem Netz, während der gesunde Speicher trotzdem die Hausversorgung übernimmt.
+
+Beispiel:
+
+```text
+Hausverbrauch = 200 W
+Speicher 1 braucht Notladung
+Speicher 2 lädt aktuell mit 1000 W
+Speicher 2 inverse_max_power = 800 W
+Notladeleistung = 300 W
+
+Speicher 2 reserviert zuerst 200 W für das Haus
+verbleibende Differenz = 1000 W - 200 W = 800 W
+verbleibender technischer Headroom = 800 W - 200 W = 600 W
+Speicher 2 gibt 300 W an Speicher 1 ab
+Speicher 2 output_limit = 200 W Haus + 300 W Transfer = 500 W
+Speicher 1 input_limit = 300 W
+```
+
+Wenn der Hausverbrauch höher ist, wird der Transfer reduziert:
+
+```text
+Hausverbrauch = 700 W
+Speicher 2 inverse_max_power = 800 W
+Speicher 2 lädt aktuell mit 1000 W
+Notladeleistung = 300 W
+
+Speicher 2 reserviert 700 W für das Haus
+verbleibender technischer Headroom = 100 W
+Speicher 2 kann nur 100 W an Speicher 1 abgeben
+```
+
+Hausverbrauch hat also immer Vorrang. Nur die Differenz wird für gegenseitiges Nachladen verwendet.
 
 ---
 
 ## 11. Wechselrichter-Drosselung über Solarman
 
-Der Wechselrichter wird über die Solarman-Entität `*_active_power_regulation` gesteuert. Diese Entität erwartet einen Prozentwert. Ab v17 berechnet der Blueprint die Drosselhöhe nicht mehr aus Hausverbrauch, aktuellem Restüberschuss oder einem Rampenschritt. Stattdessen wird bei Drosselbedarf direkt ein konfigurierbarer fester Prozentwert geschrieben.
+Der Wechselrichter wird über die Solarman-Entität `*_active_power_regulation` gesteuert. Diese Entität erwartet einen Prozentwert. Seit v17 berechnet der Blueprint die Drosselhöhe nicht mehr aus Hausverbrauch, aktuellem Restüberschuss oder einem Rampenschritt. Stattdessen wird bei Drosselbedarf direkt ein konfigurierbarer fester Prozentwert geschrieben.
 
 ### Drosselbedingung
 
@@ -674,6 +731,14 @@ Werte werden nur geschrieben, wenn die Differenz zum aktuellen Wert mindestens `
 - Kleine Schwankungen werden ignoriert.
 - Bestehende Werte werden nur geändert, wenn die Differenz mindestens `min_change_w` erreicht.
 
+### Zustand F: Ein Speicher befindet sich im Netz-Nachlademodus, der andere Speicher erzeugt genug Leistung
+
+- Der nachladende Speicher bekommt keinen Output-Befehl, damit er nicht gleichzeitig lädt und entlädt.
+- Der andere Speicher übernimmt die Hausversorgung bis zu seiner `*_inverse_max_power`-Grenze.
+- Danach wird geprüft, ob gegenseitige Notladeunterstützung nach SoC-Reserve, SoC-Richtung, Ladegrenze und aktueller Ladeleistungsdifferenz erlaubt ist.
+- Nur der Rest nach Hausversorgung wird an den nachladenden Speicher abgegeben.
+- Wenn dieser Rest nicht reicht oder unter der Mindestleistung liegt, lädt der niedrige Speicher aus dem Netz; der gesunde Speicher deckt trotzdem weiter das Haus.
+
 ---
 
 ## 14. Hinweise zur Inbetriebnahme
@@ -720,6 +785,17 @@ balance_transfer = min(
   source_max_discharge - reserved_house_output,
   target_max_charge,
   source_surplus_cap
+)
+
+Hauspriorität bei Notladung:
+emergency_house_output = min(Hausversorgung, inverse_max_power des gesunden Speichers)
+
+Gegenseitige Notladeunterstützung nach Hauspriorität:
+emergency_transfer = min(
+  emergency_charge_w,
+  source_max_discharge - emergency_house_output,
+  target_max_charge,
+  source_battery_charge_power - emergency_house_output
 )
 
 Wechselrichter-Drosselwert:
